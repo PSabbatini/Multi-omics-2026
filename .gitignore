@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.DS_Store
+._*
+*_files/
+/.quarto/
+/_site/
+
+# Rendered notebook output. Participants render locally; the template ships
+# only the .qmd sources.
+*.html

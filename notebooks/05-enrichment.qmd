@@ -1,0 +1,192 @@
+---
+title: "Module 5 — Sets and Enrichment"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+> A list of 1,698 gene names is not a finding. Today you turn one into a
+> sentence, and then check whether the sentence is real.
+>
+> Pi writes the code and you decide what it means. Ask it to use the three
+> result tables from the setup chunk, and to put its code under the step you are
+> working on.
+
+```{r setup}
+library(tidyverse)
+library(here)
+library(fgsea)
+library(msigdbr)
+
+source(here("R/count_tables.R"))
+
+d <- read_counts("instructional")
+
+# The three result tables you saved in notebook 04. If one is missing, this
+# stops and tells you which step of notebook 04 makes it.
+read_result <- function(file, where) {
+  path <- here("data", file)
+  if (!file.exists(path)) {
+    stop("Could not find ", path, "\nGo back to notebook 04, ", where,
+         ", and ask Pi to save the results table there.", call. = FALSE)
+  }
+  read_csv(path, show_col_types = FALSE)
+}
+
+genes_by_outcome   <- read_result("genes_by_outcome.csv",   "Exercise 2, step 5")
+genes_by_community <- read_result("genes_by_community.csv", "Exercise 1, step 1")
+species_by_outcome <- read_result("species_by_outcome.csv", "Exercise 2, step 3")
+```
+
+```{r}
+# Each should have one row per feature and a `stat` column.
+nrow(genes_by_outcome)
+nrow(genes_by_community)
+nrow(species_by_outcome)
+```
+
+# Exercise 1: From a gene list to a sentence
+
+## Part 1 — Predict (no code)
+
+**1. Testing 50 gene sets, how many come out at padj < 0.05 if none are truly enriched?**
+
+- *Your answer:*
+
+**2. Your outcome gene list was 838 up and 860 down, almost balanced. Does that make you more or less willing to believe an enrichment?**
+
+- *Your answer:*
+
+**3. Name one biological program you expect elevated in the people who delivered preterm.**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: run the enrichment
+
+Suggested request: *Using `genes_by_outcome` from the setup chunk, make a
+ranking vector from `stat`, named by the Ensembl ID in `feature`, with missing
+values dropped. Get the human Hallmark sets with msigdbr, using Ensembl IDs.
+Run `fgsea(sets, stat, minSize = 15, maxSize = 500)` and sort by `padj`.*
+
+- Genes in the ranking, and how many of them appear in at least one set?
+  - *Your answer:*
+- Sets significant, and how many point each way (26, with 23 higher in preterm)?
+  - *Your answer:*
+
+### Step 2: one result, several plots
+
+Bar chart of the top twelve `NES`, running-score plot for the top set, dot plot
+of all 50 sets.
+
+- Which would you put in a paper? Which tells you most about how the method works?
+  - *Your answer:*
+
+### Step 3: a report, audited
+
+From here on, write your own requests. Ask Pi to interpret the top five sets,
+then for a table of genes shared between each pair.
+
+- Which of Pi's findings were the same genes counted twice?
+  - *Your answer:*
+
+### Step 4: could the ranking have done this on its own?
+
+Ask Pi first, then run the same enrichment on `genes_by_community` and compare:
+genes up and down, sets significant and pointing one way, and the share of
+positive statistics among all genes, significant genes, and the 500 strongest.
+
+- Did Pi check, or just reassure you?
+  - *Your answer:*
+- About 50% (outcome) and about 4% (community) positive among the 500 strongest?
+  - *Your answer:*
+
+*Which of the two enrichment results I trust, and why:*
+
+### Step 5: alternatives side by side
+
+The hypergeometric version on significant genes only, up and down separately,
+and fgsea on Reactome (`C2`, `CP:REACTOME`), next to your Hallmark result.
+
+- Where do they agree? Where they disagree, which threw away information?
+  - *Your answer:*
+
+### Step 6: look at the genes
+
+Leading edge of the top set as gene symbols, then counts per million for two of
+them at week 18 by outcome.
+
+- Does the plot look like the effect the enrichment describes?
+  - *Your answer:*
+
+### Step 7: polish one figure
+
+The `NES` bar chart for a talk: readable set names, colours labelled by
+direction, set size shown, projector-sized text.
+
+# Exercise 2: The same function, on 53 species
+
+Type `/new` in Pi before you start.
+
+## Part 1 — Predict (no code)
+
+**1. A gene set holds about 200 genes; a genus holds 2 to 12 species. What does that do to your power?**
+
+- *Your answer:*
+
+**2. Which genus do you expect associated with preterm birth?**
+
+- *Your answer:*
+
+**3. Does testing 10 genus sets need as aggressive a correction as 50 gene sets?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: build the sets and run it
+
+Suggested request: *Using `species_by_outcome` from the setup chunk, make a
+ranking vector from `stat`, named by `feature`. Build one set per genus from the
+`Genus` column, keeping genera with at least two species. Run
+`fgsea(genus_sets, species_stat, minSize = 2, maxSize = 50)` and sort by
+`padj`.*
+
+- Number of sets (10), size of the largest (12)? Any species in two sets? A set called `NA`?
+  - *Your answer:*
+- Which genus is on top, and does anything pass?
+  - *Your answer:*
+
+### Step 2: family instead of genus
+
+- Does the top family contain the top genus? Do the two levels agree?
+  - *Your answer:*
+
+### Step 3: the simple way
+
+The 53 species sorted by `stat` with their genus, as a table and as a plot.
+
+- Would you have reached the same conclusion without enrichment?
+  - *Your answer:*
+
+### Step 4: argue with it
+
+Was enrichment useful on the species table? Then the opposite case.
+
+- Which argument is stronger?
+  - *Your answer:*
+
+### Step 5: when is set-based analysis worth doing?
+
+*For which of our two tables was it worth doing, and what feature of the table decides that:*
+
+## Part 3 — Reach (optional)
+
+Hand-built functional sets: Lactobacillus or not, strict anaerobe or not, on a
+published BV-associated list or not. Read every set Pi makes.
+
+- Where did Pi get the information for each set, and could you check it?
+  - *Your answer:*

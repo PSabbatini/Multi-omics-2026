@@ -1,0 +1,210 @@
+---
+title: "Module 4 — Differential Testing"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+> Raw counts go into DESeq2. Never CPM, never logged. The method does its own
+> normalisation and feeding it normalised data breaks it.
+>
+> Pi writes the code and you decide what it means. Ask it to use `d` and
+> `metadata` from the setup chunk, and to put its code under the step you are
+> working on.
+
+```{r setup}
+library(tidyverse)
+library(here)
+library(DESeq2)
+
+source(here("R/count_tables.R"))
+
+d <- read_counts("instructional")
+
+# The grouping you built and saved in notebook 02. If it is not there yet, this
+# stops with a clear message instead of a confusing one.
+groups_file <- here("data/my_sample_groups.csv")
+if (!file.exists(groups_file)) {
+  stop("Could not find ", groups_file,
+       "\nGo back to notebook 02, Exercise 2, step 5 and save your per-sample ",
+       "table with the `community` column. Or rebuild it here: the Lactobacillus ",
+       "fraction from the species table, split at 0.5.", call. = FALSE)
+}
+sample_groups <- read_csv(groups_file)
+
+metadata <- d$metadata |> left_join(sample_groups, by = "sample_id")
+```
+
+```{r}
+count(metadata, time_point, community)
+```
+
+# Exercise 1: Test the gene table with a grouping from the species table
+
+## Part 1 — Predict (no code)
+
+**1. Testing 13,738 genes, how many get a raw p-value below 0.05 if nothing is truly different?**
+
+- *Your answer:*
+
+**2. Would you rather have 157 samples at one visit, or 471 across three visits? Why?**
+
+- *Your answer:*
+
+**3. Will more significant genes be higher in anaerobe-dominant or Lactobacillus-dominant samples?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: set up and run the test
+
+Suggested request: *Using `d` and `metadata` from the setup chunk, keep only
+the week 18 samples. Keep genes with a count of at least 10 in at least a
+quarter of those samples. Run DESeq2 on the raw counts with `~ community` and
+the contrast anaerobe against lactobacillus. Add gene symbols and names from
+`d$gene_info`. Save the results table to `data/genes_by_community.csv` with the
+columns `feature` (the Ensembl ID), `baseMean`, `log2FoldChange`, `lfcSE`,
+`stat`, `pvalue`, `padj`, `symbol` and `gene_name`.*
+
+Tomorrow's notebook reads that file.
+
+- Samples in each group (37 and 120)? Genes tested (13,738)?
+  - *Your answer:*
+- Do the first five count-table columns match the first five `sample_id` values, in order?
+  - *Your answer:*
+
+### Step 2: a short report
+
+Suggested request: *Write a summary of the results: how many genes have
+`pvalue` below 0.05, how many have `padj` below 0.05, how many of those change
+more than two-fold, and how many go each way. Then list the top 20 genes by
+`padj` with symbol, name and fold change.*
+
+- Do you get 1,815 at `padj` below 0.05 and 303 of those more than two-fold?
+  - *Your answer:*
+- What do the top 20 genes have in common?
+  - *Your answer:*
+
+### Step 3: one result, four plots
+
+From here on, write your own requests. Volcano plot, MA plot, raw p-value
+histogram with the no-difference line, boxplots of the top six genes by
+community.
+
+- Pi's explanation of the sign convention:
+  - *Your answer:*
+- Does every boxplot agree with the sign of its fold change?
+  - *Your answer:*
+
+### Step 4: cutoffs are choices
+
+Genes passing at `padj` 0.01, 0.05, 0.1 crossed with fold change 0, 1.5, 2, 4.
+Then the test with a looser (10%) and a stricter (50%) gene filter.
+
+*The cutoffs I would report, and why:*
+
+### Step 5: argue with it
+
+Ask Pi to rerun on counts per million, then whether you should have used all
+471 samples.
+
+- What happened with counts per million, and why is it wrong?
+  - *Your answer:*
+- What did Pi say about using all 471 samples?
+  - *Your answer:*
+
+### Step 6: polish the volcano plot
+
+Top ten genes labelled, your own colours, direction in words under the x axis,
+dashed cutoff lines, saved as a PNG.
+
+# Exercise 2: The same test, on the species table
+
+Type `/new` in Pi before you start. Steps 3 and 5 each save a file that
+tomorrow's notebook reads.
+
+## Part 1 — Predict (no code)
+
+**1. Why can you not test the species table with the `community` column you built from it?**
+
+- *Your answer:*
+
+**2. How many of the 220 species survive "present in at least 10% of samples"? How many of those are present in all 157 samples?**
+
+- *Your answer:*
+
+**3. If any species are significant, will they be higher in preterm or in term?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: the default run
+
+Suggested request: *Using `d` and `metadata` from the setup chunk, keep the
+week 18 samples and the species present in at least 10% of them. Run DESeq2 on
+the raw counts with `~ outcome` and the contrast preterm against term, with the
+default settings. Add `Genus` and `Family` from `d$taxonomy`, and list the
+significant species with their fold changes.*
+
+- Species tested (53) and significant (19)? Do the names look like what you would expect?
+  - *Your answer:*
+
+### Step 2: look behind it
+
+Which species have no zero in any sample? Size factor against *L. iners* share,
+and against library size, both on log scales.
+
+- What are the size factors measuring?
+  - *Your answer:*
+
+### Step 3: alternatives side by side
+
+Rerun with `type = "poscounts"` size factors and compare the two runs in one
+table. Save the poscounts version to `data/species_by_outcome.csv` with columns
+`feature`, `baseMean`, `log2FoldChange`, `lfcSE`, `stat`, `pvalue`, `padj`,
+`Genus` and `Family`.
+
+*Why the first list, which looked right, was not:*
+
+### Step 4: many views of a null result
+
+Top ten species by `padj`, then the top three by outcome as log-scale boxplots,
+as presence in each group, and across all three visits.
+
+- How many of the top ten lean toward preterm? Did the two names you checked exist in `d$taxonomy`?
+  - *Your answer:*
+- Which view is most honest about how weak the signal is?
+  - *Your answer:*
+
+### Step 5: the gene table against outcome
+
+The `~ outcome` test on genes, saved to `data/genes_by_outcome.csv`. Then one
+table comparing all three tests, and the two gene volcano plots side by side.
+
+- Do you get 1,698 significant, and 50 more than two-fold?
+  - *Your answer:*
+
+*What the comparison tells me about where the outcome signal lives:*
+
+### Step 6: argue with it
+
+Is DESeq2 appropriate for microbiome counts? Then the opposite case. Then the
+gene test grouped by Nugent score of 7 or more.
+
+- Which argument was stronger?
+  - *Your answer:*
+- Did Pi tell you it dropped samples for the Nugent grouping, and how many it kept?
+  - *Your answer:*
+
+## Part 3 — Reach (optional)
+
+Species against outcome on all 471 samples, compared with your 157-sample
+result. Then, if there is time, a short Quarto report ending in
+`## Choices made`.
+
+- More samples gave more hits. Are they real? What assumption did you break?
+  - *Your answer:*

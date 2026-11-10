@@ -1,0 +1,252 @@
+---
+title: "Module 2 — Count Table Anatomy"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+> In this module Pi writes the code. Your job is to ask for numbers and plots,
+> look at each one, and decide what they mean. Ask Pi to put its code under the
+> step you are working on. Every step ends with something for you to check or
+> decide: write your answers here.
+
+```{r setup}
+library(tidyverse)
+library(here)
+
+data_dir <- "data/2-workshop2/instructional_dataset"
+
+metadata <- read_csv(here(data_dir, "01_metadata.csv"))
+species  <- read_csv(here(data_dir, "02_microbiome_counts.csv"))    # 220 species  x 471 samples
+genes    <- read_csv(here(data_dir, "04_rnaseq_counts.csv.gz"))     # 14,226 genes x 471 samples
+taxonomy <- read_csv(here(data_dir, "03_microbiome_taxonomy.csv"))
+```
+
+```{r}
+metadata
+```
+
+# Exercise 1: Many looks at the same two tables
+
+## Part 1 — Predict (no code)
+
+Answer before running anything below.
+
+**1. Of the 220 species, how many will you see in a single sample?**
+
+- *Your answer:*
+
+**2. Of the 14,226 genes, how many will you see in a single sample?**
+
+- *Your answer:*
+
+**3. Which table has a larger share of zero cells?**
+
+- *Your answer:*
+
+**4. One sample has 438 bacterial reads against a median of about 28,700. What will be wrong with it?**
+
+- *Your answer:*
+
+**5. A typical sample behaves like how many equally common species? Like how many equally expressed genes?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: the per-sample numbers
+
+Suggested request: *In step 1 of my notebook, make one data frame with a row
+for every sample in each count table, species and genes, and a `table` column
+saying which. Columns: library size, number of features detected, fraction of
+zeros, the share held by the largest feature, Shannon diversity, and the
+effective number of features.*
+
+- Does it have 942 rows, 471 for each table?
+  - *Your answer:*
+- Type `sum(species$P001_week_18)` in the console. Does it match Pi's library size for that sample?
+  - *Your answer:*
+- Is features detected never more than 220 (species) or 14,226 (genes)?
+  - *Your answer:*
+
+### Step 2: a short report
+
+Suggested request: *Under that data frame, add a summary table with the median,
+smallest and largest value of every column, separately for each table. Then
+write three sentences about anything unusual.*
+
+- Which medians were furthest from your Part 1 answers?
+  - *Your answer:*
+- Did Pi mention the 438-read sample? Did it claim anything you cannot find in the table?
+  - *Your answer:*
+
+### Step 3: one number, four plots
+
+Suggested request: *Plot the library size of every sample four ways: a
+histogram, the same histogram on a log scale, the samples ranked from smallest
+to largest, and library size by visit. Use both tables.*
+
+- Which view makes the 438-read sample obvious, and which hides it? Which would you put in a paper?
+  - *Your answer:*
+
+### Step 4: features detected against library size
+
+From here on, write your own requests. Ask for the plot and the Spearman
+correlation for each table, then ask how many extra genes the correlation
+amounts to between the shallowest and the deepest samples.
+
+- How many extra genes, out of 14,226? Does the plot agree with Pi?
+  - *Your answer:*
+
+### Step 5: which samples to drop
+
+Ask Pi to suggest a minimum library size and explain it. Then ask how many
+samples cutoffs of 1,000, 5,000, 10,000 and 20,000 reads would drop, and from
+which visits and outcomes.
+
+*The cutoff I chose, and why:*
+
+- When you asked what happens if you keep the dropped samples, did Pi's answer agree with its first reason?
+  - *Your answer:*
+
+### Step 6: polish one figure
+
+Improve one plot a request at a time: axis titles in words, log-axis labels
+like 1k and 10k, your own two colours, text readable from the back of the room,
+saved as a 6 by 4 inch PNG. Then ask for one thing you would not know how to
+code yourself.
+
+- Which request got you furthest? How did "make it look nicer" compare with a specific request?
+  - *Your answer:*
+
+### Step 7: argue with it
+
+Ask which logarithm `log()` is in R, then what the effective number would be if
+the Shannon formula used `log2()`.
+
+- Did the effective number change? Did Pi say it would?
+  - *Your answer:*
+
+# Exercise 2: Filters are choices
+
+Type `/new` in Pi before you start. Step 5 builds a file that this afternoon's
+notebook reads. If you are short on time, do step 5 first.
+
+## Part 1 — Predict (no code)
+
+**1. Keeping only species present in at least 10% of samples: how many of the 220 survive, and what share of reads is lost?**
+
+- *Your answer:*
+
+**2. The same 10% rule applied to 14,226 genes: how many survive?**
+
+- *Your answer:*
+
+**3. To compare one species between two samples, what must you do to the counts first?**
+
+- *Your answer:*
+
+**4. If you drop the rare species, does the effective number of species in a sample go up, go down, or stay about the same?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: prevalence and the filter curve
+
+Ask for each feature's prevalence in both tables and its distribution, then the
+filter curve: for cutoffs from 0 to 0.9, features kept and share of counts kept.
+
+- At 10%, does the species table keep 59 of 220 and lose about 0.8% of reads? Does the gene table keep all 14,226?
+  - *Your answer:*
+
+### Step 2: a grid of filters
+
+Ask for features kept and share of counts kept for every combination, as one
+summary table and then as a plot:
+
+- species: prevalence 5%, 10% or 25%, crossed with mean relative abundance 0, 0.01% or 0.1%
+- genes: mean CPM 1, 5 or 10, crossed with prevalence 0%, 50% or 90%
+
+*Why I filtered the species table this way:*
+
+*Why I filtered the gene table this way:*
+
+- What did your neighbour choose?
+  - *Your answer:*
+
+### Step 3: did the filter change anything you care about?
+
+Ask for each sample's effective number of species before and after your filter,
+as a scatter plot with a 1:1 line. Then the same for features detected.
+
+- Which number moved, and why did the other barely move?
+  - *Your answer:*
+
+### Step 4: normalise, then log
+
+Ask for counts per million and `log2(cpm + 1)`, histograms of one species and
+one gene before and after the log, then the same gene with `+ 0.5`, `+ 1` and
+`+ 10`.
+
+- Where does the `+ 1` change the picture, and where does it make no difference?
+  - *Your answer:*
+
+### Step 5: THE IMPORTANT ONE, the grouping column
+
+Suggested request: *From the full species table, before any filtering, compute
+the fraction of each sample's reads that belong to the genus Lactobacillus. Use
+`03_microbiome_taxonomy.csv` to find which species those are. Add a column
+called `community` that is `lactobacillus` if the fraction is 0.5 or more and
+`anaerobe` if it is below 0.5. Save `sample_id`, `lacto_fraction` and
+`community` to `data/my_sample_groups.csv`.*
+
+This afternoon's notebook reads that file back, and so does Wednesday's.
+
+- Which species names did Pi count as Lactobacillus? Should any of them not be there?
+  - *Your answer:*
+- Smallest and largest `lacto_fraction`? Both should be between 0 and 1.
+  - *Your answer:*
+- One sample's Lactobacillus counts divided by its total, worked out by you. Does it match?
+  - *Your answer:*
+
+### Step 6: the 0.5 cutoff
+
+Ask for a histogram of `lacto_fraction` with a line at 0.5, how many samples
+change group at 0.3 or 0.8, and how the split across visits changes. Then ask
+Pi to justify 0.5.
+
+- Is its reason about this data, or would it say the same about any dataset?
+  - *Your answer:*
+
+### Step 7: diversity by community
+
+Ask for the effective number of species in each community group, as a boxplot
+on a log scale.
+
+- Which group is more diverse? Is that what you would call healthy?
+  - *Your answer:*
+
+### Step 8: bar charts and heatmaps
+
+Ask for the microViz bar chart of the 10 largest genera and a heatmap of the 20
+largest with `community` as a strip along the top, then the same for genes by
+gene symbol. Then ask for variations: bars ordered by `lacto_fraction`, split by
+community, 20 genera instead of 10.
+
+- Which version tells you the most?
+  - *Your answer:*
+- Two genes whose heatmap rows look alike, and what they do (check one on NCBI Gene yourself):
+  - *Your answer:*
+
+## Part 3 — Reach (optional)
+
+Ask Pi to turn this notebook into a short QC report as a new Quarto document,
+ending in `## Choices made` with every cutoff and filter you chose and one
+alternative for each. Render it. Then ask Pi to run the same report on
+`group_a_probiotic` or `group_b_contraception`, changing only the data folder.
+
+- Is every choice you made today in the Choices made list? Did the report need more changes than the data folder?
+  - *Your answer:*

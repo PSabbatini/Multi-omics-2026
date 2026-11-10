@@ -1,0 +1,236 @@
+---
+title: "Module 3 — Distances and Ordination"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+> Pi writes the code and you decide what it means. Ask it to use `ps_species`
+> and `ps_genes` from the setup chunk. The pipeline it will use has three knobs:
+> `tax_transform() |> dist_calc() |> ord_calc("PCoA") |> ord_plot()`
+
+```{r setup}
+library(tidyverse)
+library(here)
+library(microViz)
+library(phyloseq)
+
+source(here("R/count_tables.R"))
+
+# The grouping you built and saved in notebook 02. If it is not there yet, this
+# stops with a clear message instead of a confusing one.
+groups_file <- here("data/my_sample_groups.csv")
+if (!file.exists(groups_file)) {
+  stop("Could not find ", groups_file,
+       "\nGo back to notebook 02, Exercise 2, step 5 and save your per-sample ",
+       "table with the `community` column. Or rebuild it here: the Lactobacillus ",
+       "fraction from the species table, split at 0.5.", call. = FALSE)
+}
+sample_groups <- read_csv(groups_file)
+
+# as_counts() builds a phyloseq object from either count table. For the gene
+# table it hands microViz the gene annotation as the rank table, which is why
+# every microViz verb below works on genes.
+ps_species <- as_counts(table = "microbiome")
+ps_genes   <- as_counts(table = "rnaseq", min_count = 10, min_samples = 100)
+```
+
+```{r}
+ps_species
+ps_genes
+```
+
+```{r}
+# Add your community column to both objects so you can colour by it.
+add_groups <- function(ps) {
+  sd <- as(sample_data(ps), "data.frame") |>
+    rownames_to_column("sid") |>
+    left_join(sample_groups |> select(sample_id, community, lacto_fraction),
+              by = c("sid" = "sample_id")) |>
+    column_to_rownames("sid")
+  sample_data(ps) <- sample_data(sd)
+  ps
+}
+
+ps_species <- add_groups(ps_species)
+ps_genes   <- add_groups(ps_genes)
+```
+
+# Exercise 1: The species table
+
+## Part 1 — Predict (no code)
+
+**1. Our species table is about 89% zeros. Will Bray-Curtis or Jaccard separate the community types more clearly?**
+
+- *Your answer:*
+
+**2. Shuffling `outcome` randomly across 471 samples, what R2 would PERMANOVA report?**
+
+- *Your answer:*
+
+**3. Where will the 438-read sample sit in a Bray-Curtis ordination?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: the first ordination
+
+Suggested request: *Using `ps_species` from the setup chunk, make a Bray-Curtis
+PCoA with microViz at the species level and colour it by `community`. Put the
+share of variation on each axis title.*
+
+- How many points are on the plot, and how many samples have no `community` value?
+  - *Your answer:*
+
+### Step 2: three distances, side by side
+
+Suggested request: *Make the same ordination three ways, side by side:
+`"identity"` with `"bray"`, `"binary"` with `"jaccard"`, and `"clr"` with
+`"euclidean"`. Under them, add a scree plot for each showing the share of
+variation held by the first eight axes.*
+
+*The distance I would publish, and why:*
+
+### Step 3: one plot, many colourings
+
+Ask for the Bray-Curtis ordination as a grid of panels coloured by `outcome`,
+`time_point`, `nugent`, `lacto_fraction` and library size.
+
+- Which colouring lines up with axis 1? Which shows nothing by eye?
+  - *Your answer:*
+
+### Step 4: what is axis 1?
+
+From here on, write your own requests. Ask Pi to interpret the ordination, then
+ask for the numbers behind it: the correlation of axis 1 with `lacto_fraction`,
+and the five genera that track axis 1 most closely.
+
+- Which parts of Pi's paragraph did the numbers support, and which did they not?
+  - *Your answer:*
+
+### Step 5: PERMANOVA and a null distribution
+
+Ask for the R2 and p-value of `community`, `outcome`, `time_point` and
+`rnaseq_batch`. Then shuffle `outcome` 20 times, run PERMANOVA on each with 99
+permutations, and plot the 20 R2 values with the real one marked.
+
+- Do the R2 values match the slides (about 17.5%, 8.7%, 0.5%, and nothing for batch)?
+  - *Your answer:*
+- Where does the real outcome R2 sit among the shuffled ones?
+  - *Your answer:*
+
+### Step 6: argue about the settings
+
+Ask for `by = "margin"` and `by = "terms"` side by side, and why they differ.
+Then ask whether PERMANOVA knows each participant appears three times.
+
+- Explain the answer in your own words:
+  - *Your answer:*
+
+### Step 7: the 438-read sample
+
+Ask Pi to label it on the plot, then redraw without the samples you dropped this
+morning, side by side with the original.
+
+- Was your prediction right? Did anything else move?
+  - *Your answer:*
+
+### Step 8: polish one figure
+
+Ask for variations of the community plot: ellipses, one panel per visit, point
+size by library size, lines joining each participant's visits for ten
+participants. Keep the best and make it ready for a talk.
+
+- Which variation showed you the most?
+  - *Your answer:*
+
+# Exercise 2: The identical pipeline on 14,000 genes
+
+Type `/new` in Pi before you start.
+
+## Part 1 — Predict (no code)
+
+**1. Would you use Bray-Curtis on gene counts? Why or why not?**
+
+- *Your answer:*
+
+**2. `community` explained about 18% of the species table. What share of the gene table?**
+
+- *Your answer:*
+
+**3. What share will `rnaseq_batch` explain?**
+
+- *Your answer:*
+
+## Part 2 — Ask, look, decide
+
+### Step 1: the gene ordination
+
+Suggested request: *Using `ps_genes` from the setup chunk, make a CLR plus
+Euclidean PCoA at the `symbol` level, as three panels coloured by `community`,
+`outcome` and `rnaseq_batch`.*
+
+- How many genes are in `ps_genes`? What pseudocount did CLR use, and where did that number come from?
+  - *Your answer:*
+
+### Step 2: species and genes side by side
+
+Ask for PERMANOVA on the gene ordination with the same four labels, and a table
+and bar chart of species and gene R2 values together.
+
+- Do community, outcome and batch each explain about 2% of the gene table?
+  - *Your answer:*
+
+### Step 3: a report, audited
+
+Ask Pi for a paragraph comparing the two tables. Mark each sentence as backed by
+a number or not.
+
+- Which sentences had no number behind them?
+  - *Your answer:*
+- What do you expect tomorrow's gene-by-gene tests to find?
+  - *Your answer:*
+
+### Step 4: is batch tangled up with the biology?
+
+Ask for `rnaseq_batch` against `outcome`, `community` and `time_point`, and
+whether each participant's visits all fall in one batch.
+
+- What did you find, and what would an imbalance mean for tomorrow's tests?
+  - *Your answer:*
+
+### Step 5: two ways to handle batch
+
+Ask for PERMANOVA with batch entered before outcome (`by = "terms"`), next to
+outcome alone. Then ask Pi to remove the batch effect using only installed
+packages, redraw before and after, and say exactly what it did to the numbers.
+
+- Did the outcome R2 change when batch was in the model?
+  - *Your answer:*
+- Which kind of batch correction did Pi use? Could it have removed outcome signal too?
+  - *Your answer:*
+
+### Step 6: other choices, side by side
+
+Ask for Bray-Curtis on genes, and CLR with a looser and a stricter gene filter,
+next to your CLR version.
+
+- Which differences would change your conclusions, and which are cosmetic?
+  - *Your answer:*
+
+### Step 7: one figure for a talk
+
+Species and gene ordinations side by side, the same two community colours, one
+shared legend, community R2 in each subtitle.
+
+## Part 3 — Reach (optional)
+
+Ask for gene axis 1 against species axis 1 for the same samples, with the
+correlation, then axis 2 against axis 2. Then, if there is time, a short Quarto
+report ending in `## Choices made`.
+
+- Are the two tables related?
+  - *Your answer:*
