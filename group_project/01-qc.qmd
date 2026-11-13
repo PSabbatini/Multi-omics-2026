@@ -1,0 +1,420 @@
+---
+title: "Study B (contraception) — quality control before analysis"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+> The point of a QC report is to find problems **before** they contaminate an
+> analysis. Here we check the Study B data (93 participants on three
+> contraceptives: pill, injectable, ring) for the boring-but-fatal issues:
+> samples that don't line up between tables, missing values, samples with very
+> few reads, and annotations that don't cover the features we will test.
+>
+> Each section works the same way: **what we're looking for** in plain words,
+> then the code, then the figure, then **reading** — what we think it means.
+
+```{r setup}
+library(tidyverse)
+library(here)
+
+source(here("R/count_tables.R"))
+d <- read_counts("group_b")
+
+meta  <- d$metadata
+spec  <- d$species      # 220 species x 93 samples
+genes <- d$genes        # 14,226 genes  x 93 samples
+cyt   <- d$cytokines
+```
+
+# 1. The sample sheet
+
+**What we're looking for.** The sample sheet is the row of truth: everything
+else is matched to it. If it has duplicate samples or missing values, every
+downstream join silently goes wrong. We also want to see the shape of the
+groups — if one arm is much smaller, comparisons will be noisier there.
+
+```{r}
+# Shape, duplicate IDs, and missing cells
+nrow(meta)
+n_distinct(meta$sample_id) == nrow(meta)   # TRUE = no duplicates
+sum(is.na(meta))                           # 0 = no missing values
+```
+
+```{r}
+# Who is in each arm, and what do the clinical variables look like?
+meta |> count(arm)
+meta |> summarise(nugent_min = min(nugent), nugent_max = max(nugent),
+                  ph_min = min(ph),         ph_max = max(ph))
+meta |> count(bv)        # Nugent 0-3 negative, 7-10 positive (4-6 intermediate)
+meta |> count(any_sti)
+```
+
+```{r}
+# BV status across the three arms — each bar is one arm, all the same height
+# (because the arms are unequal), so we compare the *proportions* within each.
+ggplot(meta, aes(arm, fill = bv)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c(negative = "#4DAF4A", intermediate = "#FFC107",
+                               positive = "#E41A1C")) +
+  labs(y = "fraction of participants", title = "BV status by arm")
+```
+
+**Reading.** 93 unique samples, nothing missing. The arms are unequal
+(injectable has the most people) — that is normal in an observational
+comparison and matters later for statistical power, not for QC. BV is common
+in all three arms (39 positive), and the mix looks similar across arms, so
+arm is not just a proxy for BV status.
+
+# 2. Do all five tables describe the same 93 samples?
+
+**What we're looking for.** The columns of both count tables must sit in
+**exactly the metadata order**. DESeq2 matches columns to rows by position,
+not by name — it will not warn if they disagree, it will just be wrong. (Our
+loader reorders to match, but we check anyway.)
+
+```{r}
+# The sample_ids in metadata, and in each table's first row/column
+count_cols <- function(m) colnames(m)
+
+tibble(
+  table = c("microbiome", "genes", "cytokines"),
+  same_ids_as_metadata = c(
+    identical(count_cols(spec),  meta$sample_id),
+    identical(count_cols(genes), meta$sample_id),
+    identical(cyt$sample_id,     meta$sample_id)
+  )
+)
+```
+
+**Reading.** All `TRUE` — every table is row-for-row aligned with the sample
+sheet. There is no figure for this one because it's a yes/no: a single
+`FALSE` here would stop everything until we fix it.
+
+# 3. Sequencing depth (library size)
+
+**What we're looking for.** The library size is how many reads landed in each
+sample. A sample far below the others detected fewer things *because it was
+sequenced less*, not because its biology differs — so we hunt for outliers.
+The histogram shows the shape of the whole distribution; the bar chart of
+samples sorted by depth makes individual outliers easy to name; and the
+scatter checks whether the two sequencing runs (species and genes) agree
+about which samples are shallow.
+
+```{r}
+# Total reads per sample, for both count tables
+lib <- tibble(
+  sample_id      = meta$sample_id,
+  arm            = meta$arm,
+  batch          = meta$rnaseq_batch,
+  species_lib    = colSums(spec),
+  gene_lib       = colSums(genes)
+)
+
+lib |> summarise(across(ends_with("lib"),
+          list(min = min, median = median, max = max))) |>
+  pivot_longer(everything())
+```
+
+```{r}
+# Distribution of species depths. On a log scale, a healthy sample set looks
+# like one broad lump; a broken sample sticks out as a lone bar far to the left.
+ggplot(lib, aes(x = log10(species_lib))) +
+  geom_histogram(bins = 25) +
+  labs(x = "log10 species reads", title = "Distribution of species library sizes")
+```
+
+```{r}
+# Species library sizes, smallest first; the red line is 10% of the median,
+# a rough alarm bell for "too shallow to trust".
+ggplot(arrange(lib, species_lib),
+       aes(x = reorder(sample_id, species_lib), y = species_lib)) +
+  geom_col() +
+  geom_hline(yintercept = median(lib$species_lib) / 10, colour = "red") +
+  coord_flip() +
+  labs(x = "sample", y = "species reads",
+       title = "Species library sizes (line = 10% of median)")
+```
+
+```{r}
+# The five shallowest species samples
+lib |> slice_min(species_lib, n = 5) |>
+  select(sample_id, arm, batch, species_lib)
+```
+
+```{r}
+# Same picture for the gene table
+ggplot(arrange(lib, gene_lib),
+       aes(x = reorder(sample_id, gene_lib), y = gene_lib / 1e6)) +
+  geom_col() +
+  labs(x = "sample", y = "million gene reads",
+       title = "Gene library sizes")
+```
+
+```{r}
+# Do the two sequencing runs agree about which samples are shallow? If the
+# shallowest species sample were fine on the gene side, the problem is
+# sequencing, not the sample itself.
+ggplot(lib, aes(species_lib, gene_lib / 1e6, colour = arm)) +
+  geom_point(size = 2) +
+  geom_point(data = filter(lib, species_lib == min(species_lib)),
+             shape = 21, size = 5, stroke = 1.5) +
+  labs(x = "species reads", y = "million gene reads",
+       title = "Species vs gene depth per sample (circled = B006)")
+```
+
+**Reading.** Species depths run 5,247–77,357 with a median near 29,000. The
+histogram shows one lump plus one lone bar far to the left — and the bar chart
+names it: **B006**, 5,247 reads, roughly a sixth of the median. Gene depths
+(5.9–24 million) are comfortably even; no gene sample needs attention. The
+scatter shows B006 is not unusually shallow for genes, so this is likely a
+low-yield bacterial extraction rather than a bad sample. **Decision:** drop
+B006 from downstream species analyses or keep it and check it isn't driving
+results — a choice to record.
+
+# 4. Sparsity and dominance
+
+**What we're looking for.** Both tables are **compositional**: sequencing
+gives proportions, not absolute amounts. We look at (a) how sparse each table
+is, (b) how common each feature is — a species seen in only 2 samples is noise
+we can't test, and (c) how much one feature can dominate a sample, because
+that shapes what transformations are legal later.
+
+```{r}
+# Fraction of zeros, and the biggest share any single feature holds in a sample
+rel_max <- function(m) apply(sweep(m, 2, colSums(m), "/"), 2, max)
+
+tibble(
+  table          = c("species", "genes"),
+  n_features     = c(nrow(spec), nrow(genes)),
+  frac_zeros     = c(mean(spec == 0), mean(genes == 0)),
+  median_rel     = c(median(rel_max(spec)), median(rel_max(genes))),
+  max_rel        = c(max(rel_max(spec)),    max(rel_max(genes)))
+)
+```
+
+```{r}
+# Prevalence: in how many samples is each species detected? A species seen in
+# 1-2 samples is noise we can't test; the bar chart shows how many are common.
+prev <- rowSums(spec > 0)
+ggplot(tibble(n_samples = prev), aes(x = n_samples)) +
+  geom_histogram(bins = 30) +
+  labs(x = "number of samples (out of 93) in which the species is detected",
+       y = "number of species", title = "Species prevalence")
+```
+
+```{r}
+# Rank-abundance curve for a typical sample: sort its species from most to
+# least abundant and plot. A steep fall = one species dominates; a long flat
+# tail = many rare species. The typical sample is the one closest to the
+# median library size.
+typical_id <- lib$sample_id[which.min(abs(lib$species_lib - median(lib$species_lib)))]
+x <- sort(spec[, typical_id], decreasing = TRUE)
+x <- x[x > 0]
+ggplot(tibble(rank = seq_along(x), abundance = x),
+       aes(rank, abundance)) +
+  geom_line() + geom_point(size = 1) +
+  scale_y_log10() +
+  labs(x = "rank (1 = most abundant)", y = "reads",
+       title = str_glue("Rank-abundance curve, sample {typical_id} (median depth)"))
+```
+
+**Reading.** The species table is very sparse (~88% zeros — each sample sees
+only a subset of the 220 species). The prevalence histogram is the classic
+microbiome shape: most species are detected in only a handful of samples, a
+few are detected in nearly all. The steep rank-abundance curve means one
+*Lactobacillus* often exceeds half the reads. The gene table is dense (~3%
+zeros). Sparsity pushes us toward composition-aware methods (CLR, DESeq2) for
+the species table; the gene table can take the usual RNA-seq pipeline. When we
+filter later, a prevalence threshold (e.g. species seen in ≥10% of samples)
+will drop the long tail of singletons.
+
+# 5. Are these really counts?
+
+**What we're looking for.** Raw counts must be whole, non-negative numbers
+with no missings, or DESeq2 refuses / misbehaves. This is a pass/fail check —
+no figure needed. If it fails, the "fix" is usually to go back to the
+exporter, not to patch the numbers here.
+
+```{r}
+stopifnot(
+  all(spec  >= 0), all(genes >= 0),
+  all(spec  == round(spec)), all(genes == round(genes)),
+  !any(is.na(spec)), !any(is.na(genes))
+)
+"count tables: all checks passed"
+```
+
+```{r}
+# Cytokines are allowed to have gaps — but we need to know where they are
+sum(is.na(cyt))
+cyt_nas <- cyt |>
+  filter(if_any(-sample_id, is.na)) |>
+  pull(sample_id)
+cyt_nas
+```
+
+**Reading.** Both count tables pass. Two participants, **B018 and B029, are
+missing every cytokine value** — presumably the assay failed for their
+samples, not individual markers. Consequence: cytokine analyses run on 91
+samples, and the count-table analyses on all 93, so the two arms of the
+project rest on slightly different sample sets. Worth saying so in any report
+that joins the tables.
+
+# 6. Do the features have names we can interpret?
+
+**What we're looking for.** If a taxon or gene lacks annotation we can measure
+it but not explain it. We also want to know what kinds of features are in the
+gene table — a gene list dominated by pseudogenes or NAs would change what
+"enrichment" means later.
+
+```{r}
+# Every counted taxon/gene should have exactly one annotation row
+taxa_ok  <- setequal(rownames(spec), d$taxonomy$taxon)
+genes_ok <- setequal(rownames(genes), d$gene_info$ensembl_gene_id)
+taxa_ok; genes_ok
+```
+
+```{r}
+# Gene annotation categories, and duplicate symbols
+d$gene_info |> count(locus_group, sort = TRUE)
+
+d$gene_info |>
+  count(symbol) |>
+  filter(n > 1)
+```
+
+```{r}
+# The annotation categories, as a picture
+ggplot(d$gene_info, aes(x = fct_reorder(locus_group, locus_group, .fun = length))) +
+  geom_bar() +
+  scale_y_log10() +
+  coord_flip() +
+  labs(x = NULL, y = "number of genes",
+       title = "Gene annotation categories")
+```
+
+**Reading.** Full annotation coverage in both tables — every counted feature
+has exactly one row. One catch for later: two different Ensembl genes share a
+symbol, so any per-symbol aggregation (that includes
+`tax_transform(rank = "symbol")` in microViz) will merge their counts. Gene-level
+analyses are unaffected.
+
+# 7. Cytokines
+
+**What we're looking for.** Cytokines are measured in pg/mL, usually on a log
+scale. We want to see (a) the range of each cytokine, (b) which ones sit at
+suspiciously exact repeated minima — a sign of the assay's **lower limit of
+detection** (LLOD) rather than true measurements — and (c) the outliers.
+
+```{r}
+# Range of each cytokine, sorted by the smallest value measured
+cyt |>
+  summarise(across(-sample_id, list(min = min, max = max))) |>
+  pivot_longer(everything(), names_to = c("cytokine", "stat"),
+               names_pattern = "(.*)_(min|max)") |>
+  pivot_wider(names_from = stat, values_from = value) |>
+  arrange(min)
+```
+
+```{r}
+# All cytokines on one log-scale plot. Cytokines vary over orders of
+# magnitude, so the log scale is the honest one. Everything crammed along
+# one flat line at the bottom of its box is the same story: the LLOD floor.
+cyt_long <- cyt |> pivot_longer(-sample_id, names_to = "cytokine", values_to = "pg_ml")
+ggplot(cyt_long, aes(cytokine, pg_ml)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  coord_flip() +
+  labs(x = NULL, y = "pg/mL (log scale)", title = "Cytokine distributions")
+```
+
+```{r}
+# The minimum value of each cytokine — the values that repeat exactly
+# (e.g. 0.005) are the LLOD floor, not real measurements.
+cyt_long |>
+  group_by(cytokine) |>
+  summarise(min_value = min(pg_ml, na.rm = TRUE)) |>
+  ggplot(aes(cytokine, min_value)) +
+  geom_col() +
+  scale_y_log10() +
+  coord_flip() +
+  labs(x = NULL, y = "minimum measured pg/mL (log scale)",
+       title = "Minimum values — the LLOD floors")
+```
+
+**Reading.** No missing values except B018 and B029 (see section 5). Several
+cytokines have minimum values that repeat suspiciously exactly (e.g. 0.005
+pg/mL) — almost certainly the assay's **lower limit of detection** rather than
+true measurements. If we model those cytokines we should treat sub-LLOD values
+carefully (e.g. censor or log after adding a small constant), not take 0.005
+literally.
+
+# 8. Batch effects
+
+**What we're looking for.** RNA-seq was run in two batches (B1, B2). A batch
+effect is only dangerous if it is tangled with the grouping variable: if
+every pill sample were in batch B1 and every ring sample in B2, "arm" and
+"batch" would be the same thing and we couldn't tell them apart. The grid
+shows whether the two cross; the density plot shows whether the two batches
+produce systematically different depths.
+
+```{r}
+table(meta$rnaseq_batch, meta$arm)   # rows = batch, cols = arm
+```
+
+```{r}
+# Gene library size by batch — a crude look for a level shift
+ggplot(lib, aes(batch, gene_lib / 1e6)) +
+  geom_boxplot() +
+  labs(y = "million gene reads")
+```
+
+```{r}
+# The full distribution of gene depths per batch, overlaid: if the two curves
+# sat on top of each other, the batches are interchangeable. Peaks in the
+# same place, similar spread — that is what we see.
+ggplot(lib, aes(gene_lib / 1e6, colour = batch)) +
+  geom_density(linewidth = 1) +
+  labs(x = "million gene reads", y = "density",
+       title = "Gene library size by batch")
+```
+
+**Reading.** Both arms appear in both batches at similar numbers (pill 14/14,
+injectable 20/19, ring 13/13), so batch and arm are not confounded. The
+density curves overlap almost completely. We still keep `rnaseq_batch` in
+mind as a covariate for the differential-expression step, which is standard
+practice.
+
+# Verdict
+
+| Check | Result | Action |
+|---|---|---|
+| Sample sheet complete, unique, no gaps | pass | — |
+| Tables aligned to metadata order | pass | — |
+| Species depth | one low sample (B006) | decide drop vs keep before species analyses |
+| Gene depth | even | — |
+| Counts integer, non-negative, no NA | pass | — |
+| Annotations | complete; 1 shared symbol | aggregate per gene ID, not symbol |
+| Cytokines | B018, B029 all-NA; sub-LLOD floors | cytokine analyses on 91 samples; handle LLOD |
+| Batch vs arm | not confounded | adjust for batch in DE models |
+
+Nothing here blocks the analysis. The one real decision is what to do with
+B006 in species-table work.
+
+**To check our numbers yourself:**
+- `colSums(spec)[order(colSums(spec))[1:5]]` should print B006 at 5,247 on top.
+- `rowSums(is.na(cyt))` should print two samples with 15 missing values each
+  (B018 and B029) and 91 with none.
+- `table(meta$rnaseq_batch, meta$arm)` should reproduce the 2×3 grid above.
+
+# Choices made
+
+- Low-depth alarm line: 10% of the median library size — alternatives were a fixed 1,000-read floor or interquartile-range outlier rules.
+- B006 flagged, not dropped here — dropping is a per-analysis decision recorded in each report.
+- Sparsity judged by fraction of zeros, prevalence, and maximum single-feature share — alternatives were Shannon diversity or prevalence filtering (deferred to the analysis reports).
+- Rank-abundance curve shown for one median-depth sample — a single representative, not a full colour-by-arm grid.
+- Batch assessed by tabulation, library-size boxplot, and density curves — no formal ordination coloured by batch yet, which the community report can add.
+- Sub-LLOD cytokines described, not corrected — correction method belongs to whichever report models them.

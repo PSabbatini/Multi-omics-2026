@@ -1,0 +1,345 @@
+---
+title: "Methods review — the three Group B analyses"
+subtitle: "What I checked, what I would keep, and what I would do differently"
+format: html
+execute:
+  warning: false
+  message: false
+---
+
+> I reviewed the three analyses in `dataset-overview.qmd` against their R
+> scripts (`analysis-microbiome-arm.R`, `analysis-genes-ring.R`,
+> `analysis-cst-genes.R`) — and rather than just giving opinions, I **reran
+> every part I would have done differently**. Every number below comes from
+> `group_project/review-checks.R`, which you can run yourself (about 5
+> minutes; see *How to check this page yourself* at the end).
+>
+> **The short answer: the three analyses are sound and I would keep almost
+> all of them.** The workshop rules were followed (raw counts into DESeq2,
+> column order checked, groups defined from the metadata and never from the
+> table being tested), and the write-up is unusually honest about its own
+> limitations. I would make **six changes**, listed here from most to least
+> important. Three of them change numbers you would report.
+
+| # | Change | What it affects | Effort |
+|---|--------|-----------------|--------|
+| 1 | Shrink log2FCs with `lfcShrink()` before ranking or plotting them | Which species/genes top the bar charts (fig5, fig8) — 1 of 8 top species survives | ~2 lines per chart |
+| 2 | Report the unadjusted model next to the adjusted one | Q1 and Q2 headline counts (27 vs 2 species; 66 vs 165 genes) | 1 extra model each |
+| 3 | Show the pill-vs-injectable contrast instead of inferring it | Defends the "route" grouping with one number (4 genes) | 1 `results()` call |
+| 4 | Replace "counting significant genes" with nested LRTs | Q3's headline (162 vs 70 genes — confirms their conclusion, properly) | ~10 lines |
+| 5 | Add a `betadisper()` check after every PERMANOVA | Defends the R²/p interpretations — **I ran them all; they pass** | 2 lines per test |
+| 6 | Three small fixes | Species DESeq2 design, permutation count, filters | 1 line each |
+
+## What the group already got right
+
+Keep all of this — I would not change it:
+
+- **Column order checked against metadata rows** before every test (with
+  `stopifnot`, even though the helper already reorders — belt and braces).
+- **Raw counts into DESeq2**, VST used only for plots, never for tests.
+- **Groupings always from the metadata** (`arm`, `route`, and community types
+  from the *species* table when testing the *gene* table — the rule kept
+  precisely).
+- **Adjusting for batch, BV and STI** in the gene models — the batch/armed
+  balance was already checked in `01-qc.qmd`.
+- **Honest caveats**: the compositional warnings, the BPIFA1–BV tangle, the
+  cross-sectional "association not causation" note, and the split verdict in
+  question 3 instead of forcing one story.
+- **Check-yourself sections** with concrete numbers to catch mistakes.
+
+## 1. Shrink the log2 fold changes before ranking or plotting them
+
+**The problem.** DESeq2's first estimate of a log2FC for a feature with almost
+no reads can be enormous, because a handful of reads is "infinitely" more
+than zero. The bar charts (fig5, fig8) pick their bars by *largest |log2FC|
+among significant hits* — which is exactly how you find the least trustworthy
+estimates. Look at baseMean (the average count per sample) in the species
+chart: the #1 bar, *Atopobium minutum* at **+28.29**, sits on an average of
+**18 reads across 93 samples**.
+
+**The fix.** `lfcShrink()` pulls noisy, low-count estimates toward zero while
+leaving well-supported ones alone. Two lines:
+
+```r
+shr <- lfcShrink(dds, contrast = c("route", "local", "systemic"),
+                 type = "normal")   # or contrast = c("arm", "ring", "pill")
+plot with shr$log2FoldChange instead of res$log2FoldChange
+```
+
+**What it changes (I reran it).** For the species chart, only **1 of the top
+8** bars survives in the top 8 after shrinkage:
+
+| Their top 8 (by raw log2FC) | raw LFC | shrunk LFC | baseMean |
+|---|---:|---:|---:|
+| *Atopobium minutum* | +28.29 | **−0.80** | 18 |
+| *Slackia exigua* | +24.90 | **−1.48** | 2.8 |
+| *Corynebacterium glucuronolyticum* | −21.57 | −2.88 | 3.2 |
+| *Fenollaria massiliensis* | +15.03 | +2.88 | 246 |
+| *Mobiluncus curtisii* | +11.70 | +2.49 | 305 |
+| ... | | | |
+
+Note the *sign flips*: the +28 "enriched in ring" bar is, after shrinkage,
+consistent with roughly no difference. The shrinkage-based top 8 is
+*Peptoniphilus lacrimalis* (+4.6), *Dialister* (+4.3), *Prevotella timonensis*
+(+4.2, baseMean 6,407), *Sneathia amnii* (+4.0) — the same BV-anaerobe story,
+but now carried by species with real counts. The gene chart changes too (only
+**2 of 8** survive): HSD17B13 (baseMean 8.5) and EPGN (19.7) drop out; CHGA,
+KDR, PLXNA4, PTGS2, CEACAM7, UPK3B come in — which is *closer* to the prose
+tables, which sensibly ranked by p-value instead.
+
+**What it does NOT change:** the *significance* lists (the 27 species, 66
+genes, etc. — padj is computed before shrinkage) or any conclusion. It changes
+which features the pictures point at.
+
+To read more: the
+[DESeq2 vignette](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html),
+section "Log fold change shrinkage", and the
+[`lfcShrink` reference page](https://rdrr.io/bioc/DESeq2/man/lfcShrink.html).
+
+## 2. Report the unadjusted model next to the adjusted one
+
+**The problem.** Both main DESeq2 models adjust for `bv` (and the gene model
+for `any_sti`). The write-up treats this as free protection, but it answers a
+narrower question than the headline one — and whether that matters depends on
+something the document itself points out: BV may sit **on the pathway**, not
+beside it.
+
+```
+confounder (adjust for it):        mediator (adjusting hides real signal):
+
+   bv ───> tissue                      ring ──> BV-like state ──> tissue
+    \                                    (BV is a consequence of the
+     \                                     ring, not a rival explanation)
+      arm
+```
+
+If the ring pushes the microbiome BV-ward and the BV-like tissue then changes
+gene expression, then adjusting for `bv` **removes part of the ring's effect
+you actually want to measure**. If instead BV is unrelated to method, the
+adjustment is pure gain. Cross-sectional data can't tell you which diagram
+you're in — so run both models and report both numbers. That is not
+indecisive; it's two honest answers to two different questions.
+
+**What I found when I ran both (Q2, genes, local vs systemic):**
+
+| Design | Significant genes |
+|---|---:|
+| ~ batch + route (unadjusted) | **165** |
+| ~ batch + bv + sti + route (their model) | **66** |
+
+So about 100 genes' worth of route-associated signal overlaps with the
+BV/STI state. Their BPIFA1 caution, stated in prose, is really a
+100-gene phenomenon — worth a number in the report.
+
+**The surprise (Q1, species, ring vs pill) goes the other way:**
+
+| Design | Significant species |
+|---|---:|
+| ~ batch + arm (unadjusted) | **2** |
+| ~ batch + bv + arm (their model) | **27** |
+
+Adjusting *increased* the hits, because `bv` is essentially a summary of the
+species table: putting it in the model soaks up the dominant microbiome
+variation and makes small arm differences measurable. Their adjusted choice
+was the right headline — but the unadjusted count (2!) is also worth stating,
+because it shows how completely BV dominates the raw species-level variation.
+I would report both, and say plainly: *unadjusted answers "does arm associate
+with species profiles at all" (barely); adjusted answers "beyond the BV-like
+state, does arm associate with any species" (27).*
+
+## 3. Defend the "route" grouping with the contrast that tests it
+
+The route analysis collapses pill + injectable into one "systemic" block. The
+write-up defends this indirectly, via a consistency check (11 genes shared
+between two ring contrasts, all agreeing in direction). There is a much more
+direct test, and it's one `results()` call on a model they already fitted:
+**contrast pill directly against injectable**. If the two "systemic" arms
+differ from each other all over the genome, the collapse is hiding something.
+
+I ran it (full covariate design, genes and species):
+
+| Contrast | Significant genes | Significant species |
+|---|---:|---:|
+| ring vs pill | 60 | 27 |
+| ring vs injectable | 87 | 14 |
+| **pill vs injectable** | **4** | **6** |
+
+The two systemic arms are nearly interchangeable (4 genes of 14,226), while
+the ring differs from both — so the collapse is well justified, and this
+triangle is the number that shows it. I'd put it in place of (or alongside)
+the overlap-of-11 consistency check, which is a weaker and less readable
+argument.
+
+## 4. Question 3: compare groupings with nested tests, not gene counts
+
+The document's caveat is exactly right — "the two comparisons are not formal
+statistical tests of each other" — but then leaves the 93-vs-49 comparison as
+the headline. There are two clean ways to test it properly, and I ran both:
+
+**Per-gene, the right way: nested LRTs.** Fit the gene model with *both*
+groupings, then ask (likelihood-ratio test, gene by gene) whether each
+grouping adds anything the other hasn't already explained:
+
+```r
+# does community type add anything beyond arm, gene by gene?
+DESeq(dds, test = "LRT",
+      full    = ~ rnaseq_batch + bv + any_sti + arm + ctype,
+      reduced = ~ rnaseq_batch + bv + any_sti + arm)
+# ...and the mirror image for arm beyond ctype
+```
+
+| LRT (all adjusted for batch, bv, STI) | Significant genes |
+|---|---:|
+| community type **beyond** arm | **162** |
+| arm **beyond** community type | **70** |
+
+This is the same asymmetry their heuristic found (93 vs 49), but now it is an
+actual test — **and their conclusion stands: the community type is the
+stronger pointer to host genes.** Note 162 is bigger than their 93 because it
+is a different question ("beyond arm", not "with arm ignored").
+
+**Genome-wide, the right way: marginal PERMANOVA.** Their `perm_full`
+(euc ~ type + arm, R² = 0.054, p = 0.13) is a *sequential* test — with
+adonis2's default, the second term is only tested for what it adds after the
+first, so the result depends on the order. Setting `by = "margin"` tests each
+term as if entered last, which is the fair comparison:
+
+```r
+adonis2(euc ~ ctype + arm, data = meta, permutations = 999, by = "margin")
+```
+
+My run: arm R² = 0.033 (p ≈ 0.08), ctype R² = 0.021 (p ≈ 0.4–0.5, it wobbles —
+it is permutation-based). Same split verdict they honestly reported: method
+edges it genome-wide, type wins per-gene. I'd just report it from the
+marginal version and say why.
+
+**If this were a paper, not a workshop**, I'd also consider replacing the
+Ward clustering with [Dirichlet-multinomial
+mixtures](https://doi.org/10.1371/journal.pone.0030126) — the standard
+generative model for community state types — and I'd cross-check the DESeq2
+species calls with a compositional-aware method such as
+[ANCOM-BC](https://www.nature.com/articles/s41467-020-17041-7). For the
+workshop, their choices are fine, and the planned k = 2 robustness rerun is
+the right next check.
+
+## 5. Add a dispersion check after every PERMANOVA
+
+**The problem.** PERMANOVA (adonis2) asks "do groups sit in different places".
+A significant result can also arise when groups are equally placed but **one
+is more spread out** than another. The fix is the companion test
+[`betadisper()`](https://rdrr.io/cran/vegan/man/betadisper.html): it checks
+whether the groups' *spread* (dispersion) is equal. If dispersion differs,
+PERMANOVA's p-value is ambiguous and you must not lean on it.
+
+This matters doubly here, because the write-up itself noticed a dispersion
+effect ("the diverse type just spreads wider" in fig9) — noticed, but never
+tested.
+
+**Good news: I ran all five checks, and every one passes:**
+
+| PERMANOVA distance | Grouping | Dispersion p | Verdict |
+|---|---|---:|---|
+| microbiome Bray–Curtis | arm | 0.78 | equal spread ✓ |
+| microbiome Bray–Curtis | bv | 0.71 | equal spread ✓ |
+| gene expression (VST top 2000) | community type | 0.12 | equal spread ✓ |
+| gene expression | route | 0.67 | equal spread ✓ |
+| gene expression | arm | 0.92 | equal spread ✓ |
+
+So their R² and p-value interpretations all stand — but in a report or a
+presentation, "PERMANOVA is significant (or not) and betadisper shows the
+groups are equally spread, so the test is interpretable" is the sentence that
+makes it defensible. Two lines per test:
+
+```r
+bd <- betadisper(my_dist, meta$arm)
+permutest(bd, permutations = 999)   # p > 0.05: dispersion is fine
+```
+
+## 6. Three small ones
+
+1. **Add `any_sti` to the species DESeq2 design** (Q1). The PERMANOVA adjusts
+   for arm + bv + any_sti + batch, but the species DESeq2 uses
+   `~ rnaseq_batch + bv + arm` — the STI adjustment is in one test and not the
+   other. An STI could shift specific vaginal taxa; the two models should
+   agree on what they adjust for.
+
+2. **The gene filter is a no-op — either drop the pretence or use a real one.**
+   `rowSums(genes) >= 10` keeps **all 14,226** genes (even "≥ 10 reads in ≥ 5
+   samples" keeps all 14,226). Only a presence-based rule trims anything
+   (14,224 genes at ≥ 10 reads in ≥ 9 samples). For the **species** table it
+   does matter: presence in ≥ 5 samples would keep **72** of 220, versus
+   their 110 — a prevalence filter is the more standard choice and would
+   shrink the multiple-testing burden. Either way, don't describe a filter
+   that filters nothing.
+
+3. **When a permutation p-value is borderline, don't report "≈ 0.1".**
+   The arm-alone PERMANOVA (R² = 0.03, p "≈ 0.1, wobbles") is the one result
+   nearest a decision boundary, and 999 permutations is coarse there. Use
+   9,999 permutations and `set.seed()` so the number is stable and
+   reportable to three decimals. (I would *not* change the conclusion — arm
+   alone remains weakly-at-best significant either way.)
+
+## Question-by-question summary
+
+| Question | Keep | I would change |
+|---|---|---|
+| 1. Microbiome by arm | Everything, incl. the bv-adjusted DESeq2 as headline | Shrink LFCs before fig5; report the unadjusted count (2 vs 27) with a sentence on why they differ; add `any_sti` to the design; 9,999-perm PERMANOVA |
+| 2. Ring vs systemic genes | Route framing, covariate adjustment, direction-consistency logic | Shrink LFCs before fig8; report unadjusted 165 alongside adjusted 66 and say the difference is the BV/STI pathway, not noise; defend the collapse with the pill-vs-injectable contrast (4 genes) |
+| 3. Type vs method | Ward k = 3 clustering, LRT-with-adjustment idea, the two-view (gene-counts + R²) framing | Make the comparison formal: nested LRTs (162 vs 70 — same conclusion) and `adonis2(by = "margin")`; run betadisper (passes) |
+
+## How to check this page yourself
+
+Every number in this review comes from one script:
+
+```
+Rscript group_project/review-checks.R
+```
+
+Compare its printed output with the numbers above. The ones that would catch
+me being wrong:
+
+- Section 1: gene filter keeps **14,226 of 14,226** (a no-op); species
+  presence-filter keeps **72**.
+- Section 2: species sig counts **27** (matches their report) and top-8
+  raw-vs-shrunk overlap **1 of 8**.
+- Section 3: genes **66** (matches), overlap **2 of 8**.
+- Section 4: unadjusted models **2** (species) and **165** (genes) vs their
+  adjusted **27** and **66**.
+- Section 5: pill vs injectable **4** genes; ring contrasts **60 / 87**
+  (match their report).
+- Section 6: nested LRTs **162** vs **70**; marginal PERMANOVA R² 0.021 /
+  0.033.
+- Section 7: all five betadisper p-values > 0.05 (they will wobble in the last
+  decimal — permutation tests do that).
+
+## Choices made
+
+- **Reviewed by rerunning, not re-reading**: I repeated every analysis I
+  criticised, on the same data with the same rules — alternative rejected:
+  reviewing the code only, without checking the criticisms against the data.
+- **Shrinkage method `type = "normal"`** (works with `contrast`) —
+  alternatives not chosen: `apeglm` or `ashr` (need coefficient indices, and
+  ashr needs an extra package; both fine, slightly more setup).
+- **Report both adjusted and unadjusted models rather than pick one** —
+  alternative rejected: treating the bv-adjusted model as simply "better",
+  which hides the ~100-gene question the mediator diagram raises.
+- **Route-collapse checked with the direct pill-vs-injectable contrast** —
+  alternative not chosen: a formal LRT of `arm` vs `route` designs (nearly
+  equivalent, harder to explain).
+- **Q3 compared with nested LRTs and marginal PERMANOVA** — alternative
+  rejected: keeping the significant-gene-count heuristic as the headline
+  (their own caveat already says why not).
+- **All five dispersion checks run at 999 permutations** — alternative not
+  chosen: skipping them because the PERMANOVAs looked fine (that would be
+  assuming the conclusion).
+- **Numbers quoted from my runs rounded to the precision that survives
+  reruns** (permutation p-values reported as approximate) — alternative
+  rejected: quoting exact p-values that would not reproduce.
+- **Kept their k = 3 Ward clustering for all comparisons** so my numbers are
+  comparable to theirs — alternative not chosen: rerunning everything at
+  k = 2 as well (worth doing later; their document already suggests it).
+- **Review shipped as static tables plus a reproducible script** —
+  alternative rejected: live code chunks in this document (they would take
+  ~5 minutes every render).
+- **Plain default Quarto styling** — alternative rejected: copying the
+  custom CSS of `dataset-overview.html` (cosmetic; not worth the extra file).

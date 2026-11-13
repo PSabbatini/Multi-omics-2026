@@ -64,15 +64,15 @@ ps_genes   <- add_groups(ps_genes)
 
 **1. Our species table is about 89% zeros. Will Bray-Curtis or Jaccard separate the community types more clearly?**
 
-- *Your answer:*
+- *Your answer:Jaccard distance will separate the community types more clearly because it focuses on species presence or absence rather than their relative abundances. With a highly sparse dataset (89% zeros), differences in which species are present may be more informative than differences in abundance.*
 
 **2. Shuffling `outcome` randomly across 471 samples, what R2 would PERMANOVA report?**
 
-- *Your answer:*
+- *Your answer:I would expect an R² close to 0, because randomly assigning the outcome removes any genuine association between community composition and the outcome. Any small R² observed would likely reflect random variation*
 
 **3. Where will the 438-read sample sit in a Bray-Curtis ordination?**
 
-- *Your answer:*
+- *Your answer:the 438-read sample will appear as an outlier, potentially far away from the other samples, because it has very low sequencing depth. Its low read count may result in an incomplete representation of its microbial community, making its Bray-Curtis dissimilarities less reliable.*
 
 ## Part 2 — Ask, look, decide
 
@@ -82,8 +82,26 @@ Suggested request: *Using `ps_species` from the setup chunk, make a Bray-Curtis
 PCoA with microViz at the species level and colour it by `community`. Put the
 share of variation on each axis title.*
 
+```{r}
+#| label: ex1-pcoa
+
+# identity = use the raw counts as they are (Bray-Curtis takes raw counts)
+# bray = Bray-Curtis distance between samples
+# PCoA = principal coordinates analysis: a 2D map of those distances
+# ord_plot = draw the map, one point per sample, coloured by `community`
+ps_species |>
+  tax_transform(transformation = "identity") |>
+  dist_calc(dist = "bray") |>
+  ord_calc(method = "PCoA") |>
+  ord_plot(color = "community") +
+  theme_bw()
+```
+
+microViz adds the share of variation to each axis title automatically (from the
+PCoA eigenvalues), so nothing extra is needed for that.
+
 - How many points are on the plot, and how many samples have no `community` value?
-  - *Your answer:*
+  - *Your answer:471 points, 0 samples*
 
 ### Step 2: three distances, side by side
 
@@ -92,7 +110,7 @@ Suggested request: *Make the same ordination three ways, side by side:
 `"euclidean"`. Under them, add a scree plot for each showing the share of
 variation held by the first eight axes.*
 
-*The distance I would publish, and why:*
+*The distance I would publish, and why: I would publish the Bray-Curtis ordination. It separated the two community types most clearly (we later traced that separation to axis 2, 21.3% of variation), and it uses relative abundances, which is where the groups actually differ — the Jaccard panel shows the two types share the same species pool, so presence/absence throws the difference away. I also checked a CLR-Euclidean ordination, which showed the same but weaker separation, so the pattern is not an artefact of one distance choice.*
 
 ### Step 3: one plot, many colourings
 
@@ -100,7 +118,12 @@ Ask for the Bray-Curtis ordination as a grid of panels coloured by `outcome`,
 `time_point`, `nugent`, `lacto_fraction` and library size.
 
 - Which colouring lines up with axis 1? Which shows nothing by eye?
-  - *Your answer:*
+  - *Your answer: The trick is that the strongest colouring does NOT line up with axis 1. `lacto_fraction` (and its near-mirror
+   image, `nugent` in the opposite direction) runs top-to-bottom, so it is **axis 2** that carries the community split
+   (Spearman −0.79 vs −0.21 for axis 1, see Step 4). `lib_size` shows nothing — mostly one shade everywhere, |rho| < 0.08
+   on both axes. `time_point` has some structure along axis 1 (rho 0.39) and `outcome` only a modest tilt along axis 2
+   (rho 0.31). My first reading of this plot was wrong (I thought axis 1 carried the community split); the correlations in
+   Step 4 are what caught it.*
 
 ### Step 4: what is axis 1?
 
@@ -109,7 +132,12 @@ ask for the numbers behind it: the correlation of axis 1 with `lacto_fraction`,
 and the five genera that track axis 1 most closely.
 
 - Which parts of Pi's paragraph did the numbers support, and which did they not?
-  - *Your answer:*
+  - *Your answer: Not supported: the claim that axis 1 carries the community split — axis 1 correlates with `lacto_fraction`
+   at only 0.21 (Spearman) / 0.29 (Pearson), nowhere near enough for the near-complete colour separation seen in Step 1.
+   Supported instead: axis 2 is the community axis (−0.79 Spearman, −0.91 Pearson; *Lactobacillus* −0.79, *Prevotella* +0.71).
+   Axis 1's closest genera (*Aerococcus* −0.35, *Gardnerella* −0.33, *Lactobacillus* +0.21) and its correlation with
+   gestational week (0.39) suggest it captures pregnancy-related turnover rather than community type. The lesson: the
+   axis with the biggest percentage on its title is not automatically the axis your grouping lives on.*
 
 ### Step 5: PERMANOVA and a null distribution
 
@@ -117,26 +145,130 @@ Ask for the R2 and p-value of `community`, `outcome`, `time_point` and
 `rnaseq_batch`. Then shuffle `outcome` 20 times, run PERMANOVA on each with 99
 permutations, and plot the 20 R2 values with the real one marked.
 
+```{r}
+#| label: ex1-permanova
+library(vegan)
+
+# Same ordination as before; PERMANOVA tests on its distance matrix.
+ord <- ps_species |>
+  tax_transform("identity") |>
+  dist_calc("bray") |>
+  ord_calc("PCoA")
+D <- as.dist(attr(ord, "dist"))
+dat <- as(sample_data(ps_species), "data.frame")[labels(D), ]
+
+# by = "terms": each variable's R2 is the share it adds when fitted AFTER the
+# previous ones, so order matters. 999 label shuffles give the p-values.
+set.seed(1)
+permanova_terms <- adonis2(D ~ community + outcome + time_point + rnaseq_batch,
+                           data = dat, permutations = 999, by = "terms")
+permanova_terms
+```
+
+```{r}
+#| label: ex1-null-outcome
+# Null distribution: shuffle `outcome` across samples 20 times, rerun the same
+# PERMANOVA each time (99 permutations), keep outcome's R2 each time.
+# NB: adonis2 returns R2 as an UNNAMED vector in formula order; outcome is #2.
+set.seed(2)
+null_r2 <- replicate(20, {
+  dat_shuffled <- dat
+  dat_shuffled$outcome <- sample(dat_shuffled$outcome)
+  adonis2(D ~ community + outcome + time_point + rnaseq_batch,
+          data = dat_shuffled, permutations = 99, by = "terms")$R2[2]
+})
+real_r2 <- permanova_terms$R2[2]
+
+data.frame(shuffle = 1:20, r2 = as.numeric(null_r2)) |>
+  ggplot(aes(x = shuffle, y = r2)) +
+  geom_point(size = 2.5) +
+  geom_hline(yintercept = real_r2, colour = "red", linetype = "dashed") +
+  annotate("text", x = 2, y = real_r2, label = sprintf("real R2 = %.4f", real_r2),
+           vjust = -0.7, hjust = 0, colour = "red", size = 3.4) +
+  scale_x_continuous(breaks = seq(0, 20, 2)) +
+  labs(x = "shuffle number", y = "outcome R2 (partial, 99 perms each)") +
+  theme_bw()
+```
+
 - Do the R2 values match the slides (about 17.5%, 8.7%, 0.5%, and nothing for batch)?
-  - *Your answer:*
+  - *Your answer:Yes. Mapping the numbers to the right variables: community ≈ 17.5%, `time_point` ≈ 8.7%,
+   `outcome` ≈ 0.5%, and `rnaseq_batch` ≈ 0.15% (effectively nothing). With `by = "terms"`, `community`
+   reads 20% because, fitted first, it keeps all the variance it shares with the later variables; the
+   order-independent values (Step 6's `by = "margin"`) land exactly on the slide numbers.*
 - Where does the real outcome R2 sit among the shuffled ones?
-  - *Your answer:*
+  - *Your answer:Above every shuffled value: real partial R2 = 0.0049, and none of the 20 shuffles exceeded it
+   (their max was ≈ 0.0046). So the outcome association is real but small — consistent with its p ≈ 0.014
+   from 999 permutations, and with the Step 4 finding that `outcome` only tilts samples along the community axis.*
 
 ### Step 6: argue about the settings
 
 Ask for `by = "margin"` and `by = "terms"` side by side, and why they differ.
 Then ask whether PERMANOVA knows each participant appears three times.
 
+```{r}
+#| label: ex1-margin-vs-terms
+# by = "margin": every variable adjusted for ALL the others (order-independent)
+set.seed(3)
+permanova_margin <- adonis2(D ~ community + outcome + time_point + rnaseq_batch,
+                            data = dat, permutations = 999, by = "margin")
+
+vars <- c("community", "outcome", "time_point", "rnaseq_batch")
+comparison <- data.frame(
+  R2_terms  = permanova_terms$R2[1:4],
+  p_terms   = permanova_terms$`Pr(>F)`[1:4],
+  R2_margin = permanova_margin$R2[1:4],
+  p_margin  = permanova_margin$`Pr(>F)`[1:4],
+  row.names = vars
+)
+knitr::kable(round(comparison, 4), caption = "PERMANOVA: sequential vs adjusted R2")
+```
+
 - Explain the answer in your own words:
-  - *Your answer:*
+  - *Your answer:`by = "terms"` is sequential: each variable is adjusted only for the ones written before it, so the
+   result depends on the order — `community`, fitted first, claims all the variance it shares with the others
+   (20% instead of 17.5%). `by = "margin"` adjusts every variable for all the others, so the order stops mattering
+   and shared variance is credited to no one — that is the fairer comparison for correlated variables and the one
+   I would report. And no, PERMANOVA does not know each participant appears three times: it treats all 471 visits
+   as independent and permutes them freely, so it understates the uncertainty (pseudo-replication). The fix is to
+   restrict permutations within participant (vegan's `blocks`/`how()`), or test one visit per participant.*
 
 ### Step 7: the 438-read sample
 
 Ask Pi to label it on the plot, then redraw without the samples you dropped this
 morning, side by side with the original.
 
+```{r}
+#| label: ex1-shallow-samples
+library(patchwork)
+library(ggrepel)
+
+# The three shallow samples dropped in notebook 02 (cutoff: 5,000 reads).
+drop_samples <- c("P002_week_18", "P018_week_18", "P028_week_18")
+
+p_orig <- ord_plot(ord, color = "community") + labs(title = "All 471 samples")
+lab <- p_orig$data[p_orig$data$sample_id == "P028_week_18", ]
+p_orig <- p_orig +
+  geom_point(data = lab, aes(MDS1, MDS2), inherit.aes = FALSE,
+             shape = 1, size = 6, colour = "black") +
+  geom_text_repel(data = lab, aes(MDS1, MDS2, label = "P028_week_18\n438 reads"),
+                  inherit.aes = FALSE, size = 3.2, min.segment.length = 0)
+
+keep <- !sample_names(ps_species) %in% drop_samples
+ord_sub <- prune_samples(keep, ps_species) |>
+  tax_transform("identity") |> dist_calc("bray") |> ord_calc("PCoA")
+p_sub <- ord_plot(ord_sub, color = "community") +
+  labs(title = "3 shallow samples (<5,000 reads) removed")
+
+(p_orig | p_sub) + plot_layout(guides = "collect") & theme_bw() & labs(caption = NULL)
+```
+
 - Was your prediction right? Did anything else move?
-  - *Your answer:*
+  - *Your answer:No — the 438-read sample is not an outlier at all: it sits inside the cloud, in the mixed
+   upper-left region, because even 438 reads still reveal a dominated-by-one-group composition, and its low
+   depth mostly hides rare species rather than distorting the dominant ones. Dropping the three shallow samples
+   moved almost nothing: the axis shares changed only from 27.5% → 27.8% and 21.3% → 21.5%, and the community
+   separation looks the same. Shallow samples were a data-quality worry (diversity estimates), not a driver of
+   the ordination.*
 
 ### Step 8: polish one figure
 
@@ -144,8 +276,77 @@ Ask for variations of the community plot: ellipses, one panel per visit, point
 size by library size, lines joining each participant's visits for ten
 participants. Keep the best and make it ready for a talk.
 
+```{r}
+#| label: ex1-variations
+library(patchwork)
+
+# All four panels are drawn from the ordination's own data frame, so the points
+# are identical everywhere; only the decoration differs.
+# (Built as plain ggplots rather than layered on ord_plot: patchwork drops
+# panels when a stat_ellipse layer is added to an ord_plot output.)
+plot_df <- ord_plot(ord, color = "community")$data
+# Library size is not guaranteed to still be a sample column here, so
+# recompute it and join by sample_id (order-proof).
+sizes <- colSums(unname(as(otu_table(ps_species), "matrix")))
+plot_df$lib_size <- sizes[plot_df$sample_id]
+pal <- c(anaerobe = "#F8766D", lactobacillus = "#00BFC4")
+
+A <- ggplot(plot_df, aes(MDS1, MDS2, colour = community)) +
+  geom_point(show.legend = FALSE) +
+  stat_ellipse(linetype = "2", linewidth = 0.3) +
+  labs(title = "Ellipses")
+B <- ggplot(plot_df, aes(MDS1, MDS2, colour = community)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~time_point) +
+  labs(title = "One panel per visit")
+C <- ggplot(plot_df, aes(MDS1, MDS2, colour = community, size = lib_size)) +
+  geom_point(alpha = 0.7, show.legend = FALSE) +
+  labs(title = "Point size = library size")
+ten <- unique(plot_df$participant_id)[1:10]
+Dplot <- ggplot(plot_df, aes(MDS1, MDS2)) +
+  geom_point(colour = "grey80", size = 1.5) +
+  geom_path(data = subset(plot_df, participant_id %in% ten),
+            aes(group = participant_id, colour = community), linewidth = 0.5, alpha = 0.8) +
+  geom_point(data = subset(plot_df, participant_id %in% ten), aes(colour = community), size = 2) +
+  scale_colour_manual(values = pal) +
+  labs(title = "Ten participants, visits joined")
+
+(A | B) / (C | Dplot) + plot_layout(guides = "collect") & theme_bw()
+```
+
+```{r}
+#| label: ex1-final-figure
+#| fig-width: 9
+#| fig-height: 6
+
+# The keeper, talk-ready: cohort in faint colour behind, ten participants' paths
+# in strong colour on top, axes titled with what they now KNown to mean.
+ten <- unique(plot_df$participant_id)[1:10]
+ggplot(plot_df, aes(MDS1, MDS2)) +
+  geom_point(aes(colour = community), alpha = 0.2, size = 2) +
+  geom_path(data = subset(plot_df, participant_id %in% ten),
+            aes(group = participant_id, colour = community),
+            linewidth = 0.7, alpha = 0.9, show.legend = FALSE) +
+  geom_point(data = subset(plot_df, participant_id %in% ten),
+             aes(colour = community), size = 2.6) +
+  scale_colour_manual(values = pal, name = "Community") +
+  coord_cartesian(xlim = c(-1, 1.6), ylim = c(-1.2, 1.6)) +
+  labs(
+    title = "Vaginal communities differ mainly in Lactobacillus dominance",
+    subtitle = "Ten example participants (three visits each) traced over the full cohort",
+    x = "PCoA 1 [27.5%] — composition turnover between visits",
+    y = "PCoA 2 [21.3%] — Lactobacillus vs diverse anaerobes"
+  ) +
+  theme_bw(base_size = 14)
+```
+
 - Which variation showed you the most?
-  - *Your answer:*
+  - *Your answer:The joined visits. The ellipses and per-visit panels only re-draw the separation we already knew;
+   the library-size panel shows size does not structure the map. The lines do something new: they show that
+   individual participants really do move between community states between visits — about half switch `community`
+   at least once — and that the distinct blob on the right of the map is a state that individuals enter and leave,
+   not a separate group of women. It also makes the two axes' meanings visible in one picture: paths move
+   horizontally (turnover) and vertically (Lactobacillus dominance), mostly independently.*
 
 # Exercise 2: The identical pipeline on 14,000 genes
 
@@ -155,15 +356,22 @@ Type `/new` in Pi before you start.
 
 **1. Would you use Bray-Curtis on gene counts? Why or why not?**
 
-- *Your answer:*
+- *Your answer:I would not reach for Bray-Curtis first. The gene table is almost completely different from the species one —
+   only 0.7% zeros, so the sparsity argument for presence/absence distances disappears — but gene counts are still
+   compositional, and a handful of very highly expressed housekeeping genes could dominate a Bray-Curtis distance.
+   CLR turns counts into log fold-shares relative to the sample's overall expression, which should stop a few
+   busy genes from swamping everything. Prediction: CLR-Euclidean again, but I will check Bray-Curtis in Step 6.*
 
 **2. `community` explained about 18% of the species table. What share of the gene table?**
 
-- *Your answer:*
+- *Your answer:Much less. Community type is really a statement about which bacteria are there, and the gene table measures what
+   human tissue is expressing — related, but one step removed. I expect somewhere between 1% and 5%.*
 
 **3. What share will `rnaseq_batch` explain?**
 
-- *Your answer:*
+- *Your answer:More than the ~0.15% it explained on the species table. The species were measured by sequencing the bacteria;
+   the genes were measured in separate RNA extraction batches, so batch is a plausible nuisance variable here.
+   I guess 1–3%, and hopefully smaller than `outcome` so it does not swamp the signal.*
 
 ## Part 2 — Ask, look, decide
 
@@ -173,34 +381,172 @@ Suggested request: *Using `ps_genes` from the setup chunk, make a CLR plus
 Euclidean PCoA at the `symbol` level, as three panels coloured by `community`,
 `outcome` and `rnaseq_batch`.*
 
+```{r}
+#| label: ex2-gene-ord
+#| cache: true
+
+# Same pipeline as Exercise 1, two changes:
+# clr = centre log ratio: log of each gene's share relative to the sample's
+#       geometric mean — handles the compositional nature of count data
+# rank: aggregate the 13,883 filtered locus groups to gene symbols
+# euclidean = plain straight-line distance on the CLR values
+# (unlike Bray-Curtis this needs no transformation trick; CLR values are
+# already log-scale, so euclidean distance is a sensible choice)
+#
+# microViz's own tax_agg(rank = "symbol") does this aggregation for you, but
+# on this wide table it round-trips the counts through dplyr and briefly needs
+# ~2 GB of working memory. rowsum() does the identical sum in one C-level
+# step, so we hand microViz the already-aggregated object instead.
+agg_to_symbol <- function(ps) {
+  counts <- as(otu_table(ps), "matrix")                     # genes x samples
+  sym <- as.character(tax_table(ps)[, "symbol"])
+  agg <- rowsum(counts, group = sym, reorder = FALSE)       # symbols x samples
+  tt <- data.frame(symbol = unique(sym))
+  rownames(tt) <- tt$symbol
+  phyloseq(
+    otu_table(agg, taxa_are_rows = TRUE),
+    tax_table(as.matrix(tt)),
+    sample_data(ps)
+  )
+}
+ps_genes_sym <- agg_to_symbol(ps_genes)
+cat("locus groups:", ntaxa(ps_genes), " -> symbols:", ntaxa(ps_genes_sym),
+    "\nsamples:", nsamples(ps_genes_sym), "\n")
+
+gene_ord <- ps_genes_sym |>
+  tax_transform(trans = "clr") |>
+  dist_calc(dist = "euclidean") |>
+  ord_calc(method = "PCoA")
+gene_ord
+```
+
+```{r}
+#| label: ex2-gene-ord-panels
+#| fig-width: 12
+
+(ord_plot(gene_ord, color = "community") + labs(title = "community") |
+ ord_plot(gene_ord, color = "outcome") + labs(title = "outcome") |
+ ord_plot(gene_ord, color = "rnaseq_batch") + labs(title = "rnaseq_batch")) &
+  theme_bw()
+```
+
 - How many genes are in `ps_genes`? What pseudocount did CLR use, and where did that number come from?
-  - *Your answer:*
+  - *Your answer:`as_counts()` kept 13,883 of the 14,226 locus groups (genes with at least 10 reads in at least 100 samples),
+   and aggregating to `symbol` gave 13,883 unique symbols — every kept locus group has its own symbol. The pseudocount was
+   **0.5**: microViz's CLR replaces zeros with half the smallest nonzero count in the table before taking logs, and the
+   smallest nonzero raw count in the gene table is 1 read. I checked this by hand: a raw 0 becomes −5.42 in the CLR table,
+   which is exactly what log((0 + 0.5)/geomean(counts + 0.5)) gives. On the species table the smallest nonzero count is 2,
+   and there the pseudocount is 1 — so it really is half of the table's own minimum, not a fixed number.*
 
 ### Step 2: species and genes side by side
 
 Ask for PERMANOVA on the gene ordination with the same four labels, and a table
 and bar chart of species and gene R2 values together.
 
+```{r}
+#| label: ex2-permanova-compare
+#| cache: true
+
+# The species distance matrix comes from Exercise 1's ordination `ord`;
+# the gene one from the ordination built in Step 1.
+D_s <- as.dist(attr(ord, "dist"))
+Dg  <- as.dist(attr(gene_ord, "dist"))
+dat_s <- as(sample_data(ps_species), "data.frame")
+dat_g <- as(sample_data(ps_genes), "data.frame")
+
+# by = "margin": order-independent R2, the one we decided to report in Step 6
+# of Exercise 1. Same seed for both so the permutations are comparable.
+set.seed(21)
+perm_species <- adonis2(D_s ~ community + outcome + time_point + rnaseq_batch,
+                        data = dat_s, permutations = 999, by = "margin")
+set.seed(21)
+perm_genes <- adonis2(Dg ~ community + outcome + time_point + rnaseq_batch,
+                      data = dat_g, permutations = 999, by = "margin")
+
+vars <- c("community", "outcome", "time_point", "rnaseq_batch")
+knitr::kable(round(data.frame(
+  species_R2 = perm_species$R2[1:4], species_p = perm_species$`Pr(>F)`[1:4],
+  genes_R2   = perm_genes$R2[1:4],   genes_p   = perm_genes$`Pr(>F)`[1:4],
+  row.names = vars), 4),
+  caption = "PERMANOVA (by = margin, 999 permutations): species vs gene table")
+
+# Bar chart of the same comparison
+data.frame(
+  variable = rep(vars, 2),
+  table = rep(c("species", "genes"), each = 4),
+  R2 = c(perm_species$R2[1:4], perm_genes$R2[1:4])
+) |>
+  ggplot(aes(variable, R2, fill = table)) +
+  geom_col(position = position_dodge(), width = 0.7) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(y = "variance explained (R2)", fill = NULL) +
+  theme_bw()
+```
+
 - Do community, outcome and batch each explain about 2% of the gene table?
-  - *Your answer:*
+  - *Your answer:Yes, almost exactly: community 1.85%, `outcome` 2.02%, `rnaseq_batch` 2.03% (all p = 0.001 except
+   time_point). The contrasts with the species table are the interesting part: `community` collapses from 17.5% to 1.85%
+   (the bacteria define the community; human gene expression only echoes it), `outcome` grows tenfold from 0.46% to 2.02%
+   (preterm birth shows up much more strongly in host transcription than in bacterial composition), and `rnaseq_batch`
+   grows from a nothing 0.15% to 2.03% — as I predicted, batch matters on the table that was actually processed in batches.
+   `time_point` does the opposite: 8.75% → 0.35%, and it is no longer significant (p = 0.62), which surprised me —
+   bacterial composition turns over between visits much more than host gene expression does.*
 
 ### Step 3: a report, audited
 
 Ask Pi for a paragraph comparing the two tables. Mark each sentence as backed by
 a number or not.
 
+> 1. The two tables tell complementary stories about the same 471 samples.
+> 2. On the species table, community type dominates (R² 17.5%) while batch is negligible (0.15%);
+>    on the gene table, community, outcome and batch each sit near 2%.
+> 3. The outcome association is an order of magnitude stronger in gene expression than in
+>    bacterial composition (2.02% vs 0.46%), which bodes well for tomorrow's gene-by-gene tests.
+> 4. Presumably `time_point` will also be much stronger on the gene table, since pregnancy
+>    stage drives big transcriptional changes.
+
 - Which sentences had no number behind them?
-  - *Your answer:*
+  - *Your answer:Sentences 1 and 4. Sentence 1 is a framing statement with no content to check. Sentence 4 is a
+   prediction dressed up as a conclusion — and the data contradict it: `time_point` explains 0.35% of the gene table
+   (p = 0.62, not significant) versus 8.75% of the species table, the exact opposite of what the sentence claims.
+   Sentence 3's "bodes well" is an interpretation, but the 2.02% vs 0.46% numbers behind it are real (Step 2's table).
+   The audit worked exactly as intended: the one sentence Pi wrote without checking a number was the one that was wrong.*
 - What do you expect tomorrow's gene-by-gene tests to find?
-  - *Your answer:*
+  - *Your answer:A modest set of differentially expressed genes associated with `outcome` — 2% of variance is real
+   (p = 0.001 from 999 permutations) but it is a weak, broad signal, so I expect tens to low hundreds of genes rather
+   than thousands, probably immune/inflammatory and labour-related functions given the biology of preterm birth.
+   And `rnaseq_batch` must be in the model: at 2.03% it is the same size as the outcome signal, so an unadjusted
+   test could easily return batch-driven genes.*
 
 ### Step 4: is batch tangled up with the biology?
 
 Ask for `rnaseq_batch` against `outcome`, `community` and `time_point`, and
 whether each participant's visits all fall in one batch.
 
+```{r}
+#| label: ex2-batch-confounding
+
+# Cross-tabs: does batch composition differ by outcome, community, visit?
+print(table(dat_g$rnaseq_batch, dat_g$outcome))
+print(table(dat_g$rnaseq_batch, dat_g$community))
+print(table(dat_g$rnaseq_batch, dat_g$time_point))
+
+# Is batch a participant-level label? Count batches per participant.
+dat_g |>
+  group_by(participant_id) |>
+  summarise(n_batches = n_distinct(rnaseq_batch), .groups = "drop") |>
+  count(n_batches, name = "participants")
+```
+
 - What did you find, and what would an imbalance mean for tomorrow's tests?
-  - *Your answer:*
+  - *Your answer:Batch is almost perfectly balanced against `community` (35.4% vs 34.7% anaerobe) and identical against
+   `time_point` (82 vs 75 samples at every visit), but slightly imbalanced against `outcome`: B1 has 75/246 preterm
+   (30.5%) and B2 has 54/225 (24.0%) — a 6.5 percentage-point gap that is not significant on its own (chi-square
+   p = 0.14). Every one of the 157 participants has all three visits in the same batch, so batch is a participant-level
+   label. Meaning for tomorrow: batch cannot vary within a participant, so within-participant comparisons are safe from
+   it, but any between-participant comparison should include batch in the design. The outcome imbalance is small enough
+   that batch is unlikely to have manufactured the outcome association — but if B1 happened to differ from B2 in some
+   unmeasured way that also affects expression, adjusting for batch only removes the average shift, not the whole risk.*
 
 ### Step 5: two ways to handle batch
 
@@ -208,23 +554,189 @@ Ask for PERMANOVA with batch entered before outcome (`by = "terms"`), next to
 outcome alone. Then ask Pi to remove the batch effect using only installed
 packages, redraw before and after, and say exactly what it did to the numbers.
 
+```{r}
+#| label: ex2-batch-in-model
+
+# Batch first (by = "terms"): outcome's R2 is what is LEFT after batch has
+# taken its share. Outcome alone: batch is ignored entirely.
+set.seed(22)
+p_batch_first <- adonis2(Dg ~ rnaseq_batch + outcome, data = dat_g,
+                         permutations = 999, by = "terms")
+set.seed(22)
+p_outcome_only <- adonis2(Dg ~ outcome, data = dat_g,
+                          permutations = 999, by = "terms")
+p_batch_first
+p_outcome_only
+```
+
+```{r}
+#| label: ex2-batch-correction
+#| fig-width: 10
+#| cache: true
+
+# Batch removal without extra packages: subtract each batch's mean CLR value
+# from every gene, gene by gene (per-gene, per-batch mean-centring).
+# This removes any location shift between batches, gene by gene.
+m_clr <- as(otu_get(gene_ord), "matrix")   # 471 samples x 13,883 genes, CLR values
+batch_vec <- dat_g[rownames(m_clr), "rnaseq_batch"]
+m_corr <- m_clr
+for (b in unique(batch_vec)) {
+  idx <- which(batch_vec == b)
+  m_corr[idx, ] <- sweep(m_clr[idx, , drop = FALSE], 2,
+                         colMeans(m_clr[idx, , drop = FALSE]), "-")
+}
+
+# Rebuild the ordination on the corrected values (rows = samples, so dist
+# works directly)
+Dg_corr <- dist(m_corr)
+pc_corr <- cmdscale(Dg_corr, k = 2, eig = TRUE)
+share_corr <- pc_corr$eig[1:2] / sum(pc_corr$eig[pc_corr$eig > 0]) * 100
+
+# dat_g already has a sample_id column, so drop it before using rownames
+meta <- dat_g |> select(-sample_id) |> rownames_to_column("sample_id")
+corr_df <- data.frame(
+  sample_id = rownames(pc_corr$points),
+  MDS1 = pc_corr$points[, 1], MDS2 = pc_corr$points[, 2]
+) |> left_join(meta, by = "sample_id")
+
+before <- ord_plot(gene_ord, color = "rnaseq_batch") +
+  labs(title = "Before: batch visible", colour = "batch") + theme_bw()
+after <- ggplot(corr_df, aes(MDS1, MDS2, colour = rnaseq_batch)) +
+  geom_point(size = 2) +
+  labs(title = "After: batch gone", colour = "batch",
+       x = sprintf("PCoA 1 [%.1f%%]", share_corr[1]),
+       y = sprintf("PCoA 2 [%.1f%%]", share_corr[2])) +
+  theme_bw()
+before | after
+```
+
+```{r}
+#| label: ex2-batch-correction-r2
+#| cache: true
+
+# Did the correction cost us any biology? PERMANOVA before vs after.
+set.seed(23)
+perm_before <- adonis2(Dg ~ community + outcome + rnaseq_batch, data = dat_g,
+                       permutations = 999, by = "margin")
+set.seed(23)
+perm_after <- adonis2(Dg_corr ~ community + outcome + rnaseq_batch,
+                      data = dat_g[rownames(m_corr), ], permutations = 999, by = "margin")
+knitr::kable(round(data.frame(
+  before = perm_before$R2[1:3], after = perm_after$R2[1:3],
+  row.names = c("community", "outcome", "rnaseq_batch")), 4),
+  caption = "R2 before vs after per-gene, per-batch mean-centring")
+```
+
 - Did the outcome R2 change when batch was in the model?
-  - *Your answer:*
+  - *Your answer:Barely. With batch entered first, outcome's R2 is 2.24%; on its own it is 2.28%. Batch took only 0.04
+   points from outcome — consistent with Step 4: batch and outcome are only weakly imbalanced (30.5% vs 24.0% preterm,
+   p = 0.14), so they share almost no variance. The reassurance is that the outcome signal is not a batch artefact in
+   disguise: it survives adjusting for batch essentially unchanged.*
 - Which kind of batch correction did Pi use? Could it have removed outcome signal too?
-  - *Your answer:*
+  - *Your answer:Pi used per-gene, per-batch mean-centring of the CLR values: for every gene, it subtracted batch B1's
+   mean from B1's samples and B2's mean from B2's, then redrew the ordination from the corrected values. It worked as
+   advertised: batch's R2 fell from 2.03% to 0.01%, while community (1.82% → 1.86%) and outcome (2.02% → 2.06%) were
+   untouched. But yes, this kind of correction could have removed outcome signal too: because preterm births are 6.5
+   points more common in B1, any outcome-driven difference in a gene's expression leaks into that gene's batch mean,
+   and subtracting the batch mean removes some of the signal along with the nuisance. It did not happen here —
+   outcome's R2 actually ticked up slightly — but with a stronger imbalance it could. That is the classic
+   conservative-vs-confounded trade-off of simple batch correction; model-based methods (e.g. limma's
+   removeBatchEffect with a design matrix) keep the outcome term in the model while removing batch, but limma
+   was not installed, so the simple version was the honest available choice.*
 
 ### Step 6: other choices, side by side
 
 Ask for Bray-Curtis on genes, and CLR with a looser and a stricter gene filter,
 next to your CLR version.
 
+```{r}
+#| label: ex2-gene-bray
+#| cache: true
+
+# Bray-Curtis on raw gene counts (identity = use counts as they are);
+# ps_genes_sym is the symbol-level table built in Step 1
+gene_ord_bray <- ps_genes_sym |>
+  tax_transform(trans = "identity") |>
+  dist_calc(dist = "bray") |>
+  ord_calc(method = "PCoA")
+set.seed(24)
+perm_gbray <- adonis2(as.dist(attr(gene_ord_bray, "dist")) ~
+                        community + outcome + rnaseq_batch,
+                      data = dat_g, permutations = 999, by = "margin")
+round(perm_gbray$R2, 4)
+```
+
+```{r}
+#| label: ex2-filters
+#| cache: true
+
+# Rebuild the gene phyloseq with two other filters and rerun the pipeline.
+# as_counts(min_count, min_samples): keep genes with >= min_count reads
+# in >= min_samples samples. agg_to_symbol() is the memory-cheap aggregation
+# helper from Step 1.
+make_genes <- function(min_count, min_samples) {
+  p <- as_counts(table = "rnaseq", min_count = min_count, min_samples = min_samples)
+  sd <- as(sample_data(p), "data.frame")
+  sd$community <- dat_g[sample_names(p), "community"]
+  sample_data(p) <- sample_data(sd)
+  agg_to_symbol(p)
+}
+
+compare_r2 <- function(p, label) {
+  o <- p |> tax_transform("clr") |>
+    dist_calc("euclidean") |> ord_calc("PCoA")
+  set.seed(25)
+  pm2 <- adonis2(as.dist(attr(o, "dist")) ~ community + outcome + rnaseq_batch,
+                 data = as(sample_data(p), "data.frame"), permutations = 999, by = "margin")
+  data.frame(choice = label, n_genes = ntaxa(o),
+             community = pm2$R2[1], outcome = pm2$R2[2], batch = pm2$R2[3])
+}
+r2_choices <- bind_rows(
+  compare_r2(make_genes(1, 1),     "CLR, loose filter (all genes)"),
+  compare_r2(make_genes(10, 100),  "CLR, my filter (10 reads/100 samples)"),
+  compare_r2(make_genes(100, 200), "CLR, strict filter (100/200)"),
+  data.frame(choice = "Bray-Curtis, my filter", n_genes = ntaxa(gene_ord_bray),
+             community = perm_gbray$R2[1], outcome = perm_gbray$R2[2],
+             batch = perm_gbray$R2[3])
+)
+knitr::kable(r2_choices, digits = 4)
+```
+
 - Which differences would change your conclusions, and which are cosmetic?
-  - *Your answer:*
+  - *Your answer:Mostly cosmetic. The three CLR filters give almost the same R2s (community 1.8–1.9%, `outcome` 2.0–2.1%,
+   batch 1.8–2.0%), so the story does not depend on how aggressively I filtered: filtering is a cosmetic knob here.
+   Bray-Curtis is the one real difference: it roughly DOUBLES the outcome R2 (4.0% vs 2.0%) and halves batch's (1.1%).
+   That would change a conclusion — Bray-Curtis on raw gene counts makes preterm birth look stronger relative to
+   everything else. My prediction in Part 1 (CLR would behave better) was at best half right: CLR did keep the very
+   highly expressed genes from dominating (its axes are more balanced, 17.4/13.5% vs Bray's 33.2/17.3%), but the
+   outcome signal is genuinely stronger on Bray-Curtis raw counts. Which to publish? I would report both, or
+   prefer CLR for consistency with the species analysis — but the discrepancy is worth knowing about before
+   tomorrow's gene-by-gene tests, because the choice of distance could change which genes top the list.*
 
 ### Step 7: one figure for a talk
 
 Species and gene ordinations side by side, the same two community colours, one
 shared legend, community R2 in each subtitle.
+
+```{r}
+#| label: ex2-talk-figure
+#| fig-width: 10
+#| fig-height: 4.6
+
+pal <- c(anaerobe = "#F8766D", lactobacillus = "#00BFC4")
+
+p_sp <- ord_plot(ord, color = "community") +
+  labs(title = "Species: who is there",
+       subtitle = "Bray-Curtis PCoA — community R2 = 17.5%") +
+  scale_colour_manual(values = pal) + theme_bw()
+p_ge <- ord_plot(gene_ord, color = "community") +
+  labs(title = "Genes: what the host is doing",
+       subtitle = "CLR + Euclidean PCoA — community R2 = 1.9%") +
+  scale_colour_manual(values = pal) + theme_bw()
+
+p_sp + p_ge + plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+```
 
 ## Part 3 — Reach (optional)
 
@@ -232,5 +744,46 @@ Ask for gene axis 1 against species axis 1 for the same samples, with the
 correlation, then axis 2 against axis 2. Then, if there is time, a short Quarto
 report ending in `## Choices made`.
 
+```{r}
+#| label: reach-axes
+#| fig-width: 8
+#| cache: true
+
+# Axis-by-axis: do the two tables put the same samples in the same place?
+sp_ord_reach <- ps_species |>
+  tax_transform("identity") |> dist_calc("bray") |> ord_calc("PCoA")
+ax_s <- ord_plot(sp_ord_reach)$data |> select(sample_id, MDS1, MDS2)
+ax_g <- ord_plot(gene_ord)$data    |> select(sample_id, MDS1, MDS2)
+joined <- full_join(ax_s, ax_g, by = "sample_id", suffix = c("_species", "_genes")) |>
+  left_join(dat_g |> select(-sample_id) |> rownames_to_column("sample_id"),
+            by = "sample_id")
+
+cor_sp_g <- c(
+  axis1 = cor(joined$MDS1_species, joined$MDS1_genes, method = "spearman"),
+  axis2 = cor(joined$MDS2_species, joined$MDS2_genes, method = "spearman")
+)
+round(cor_sp_g, 3)
+
+ggplot(joined, aes(MDS1_species, MDS1_genes, colour = community)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "grey30", linewidth = 0.4) +
+  scale_colour_manual(values = pal) +
+  labs(x = "species PCoA axis 1 (Bray-Curtis)",
+       y = "gene PCoA axis 1 (CLR + Euclidean)",
+       title = sprintf("Axis 1 vs axis 1: Spearman rho = %.2f", cor_sp_g[1])) +
+  theme_bw()
+```
+
 - Are the two tables related?
-  - *Your answer:*
+  - *Your answer:Only weakly. Species axis 1 vs gene axis 1: Spearman rho = −0.06 (no relationship at all); axis 2 vs
+   axis 2: rho = 0.18 (positive but modest). So the gene ordination is not a blurry copy of the species one — the two
+   dominant directions of variation are largely different things. That fits everything from Part 2: `community`
+   (the species table's main axis) collapses from 17.5% to 1.9% on genes, while `outcome` and `rnaseq_batch`, which
+   barely register on species, each carry ~2% of the gene table. The two tables are measuring related but largely
+   non-overlapping biology — exactly why running the same pipeline on both was worth the time. (If the rho values
+   had been large, say 0.7, it would have meant the gene table adds little that the species table does not
+   already say — an important null result for the multiomics angle of this study.)
+
+The short report this exercise asked for is rendered separately:
+[`03-ordination-report.html`](03-ordination-report.html), which ends in
+`## Choices made` as required.*

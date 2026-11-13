@@ -47,15 +47,17 @@ count(metadata, time_point, community)
 
 **1. Testing 13,738 genes, how many get a raw p-value below 0.05 if nothing is truly different?**
 
-- *Your answer:*
+- *Your answer: 687 genes - 5% of 13738*
 
 **2. Would you rather have 157 samples at one visit, or 471 across three visits? Why?**
 
-- *Your answer:*
+- *Your answer: 471 samples across three visits, provided that the repeated measurements and within-person correlations are accounted for in the statistical analysis.
+
+Having more samples across three visits provides an opportunity to investigate changes in gene expression over time, rather than capturing differences at just one time point. However, repeated samples from the same individuals are not statistically independent, so the analysis should account for this*
 
 **3. Will more significant genes be higher in anaerobe-dominant or Lactobacillus-dominant samples?**
 
-- *Your answer:*
+- *Your answer:anaerobe dominant*
 
 ## Part 2 — Ask, look, decide
 

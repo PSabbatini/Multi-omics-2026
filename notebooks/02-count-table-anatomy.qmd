@@ -36,23 +36,23 @@ Answer before running anything below.
 
 **1. Of the 220 species, how many will you see in a single sample?**
 
-- *Your answer:*
+- *Your answer:~50*
 
 **2. Of the 14,226 genes, how many will you see in a single sample?**
 
-- *Your answer:*
+- *Your answer:~1000-2000*
 
 **3. Which table has a larger share of zero cells?**
 
-- *Your answer:*
+- *Your answer:Gene table, it has more features, not all species will have all genes*
 
 **4. One sample has 438 bacterial reads against a median of about 28,700. What will be wrong with it?**
 
-- *Your answer:*
+- *Your answer:low sequencing depth - fewer species detected, species richness and diversity may be underestimated*
 
 **5. A typical sample behaves like how many equally common species? Like how many equally expressed genes?**
 
-- *Your answer:*
+- *Your answer: About 3 equally common species and about 1,000 equally expressed genes. (Step 2 confirmed this: the medians came out at 3.2 species and 1,047 genes.)*
 
 ## Part 2 — Ask, look, decide
 
@@ -65,11 +65,52 @@ zeros, the share held by the largest feature, Shannon diversity, and the
 effective number of features.*
 
 - Does it have 942 rows, 471 for each table?
-  - *Your answer:*
+  - *Your answer:yes it does*
 - Type `sum(species$P001_week_18)` in the console. Does it match Pi's library size for that sample?
-  - *Your answer:*
+  - *Your answer: yes it matches, 22756*
 - Is features detected never more than 220 (species) or 14,226 (genes)?
-  - *Your answer:*
+  - *Your answer: yes, it cannot exceed the total number of features in each table*
+
+```{r}
+# One row per sample per count table, with the per-sample anatomy numbers.
+
+sample_stats <- function(counts, table_name) {
+  # setup loads tibbles with feature IDs in column 1; make a count matrix
+  m <- as.matrix(counts[, -1])
+  rownames(m) <- counts[[1]]
+  # proportions of each feature within each sample (each column sums to 1)
+  p <- sweep(m, 2, colSums(m), "/")
+  # Shannon diversity: -sum(p * log(p)). Where p is 0 the term is NaN, so skip it.
+  shannon <- -colSums(p * log(p), na.rm = TRUE)
+  tibble(
+    sample_id          = colnames(m),
+    table              = table_name,
+    library_size       = colSums(m),
+    features_detected  = colSums(m > 0),
+    fraction_zeros     = colMeans(m == 0),
+    largest_feature    = apply(m, 2, max) / colSums(m),
+    shannon            = shannon,
+    effective_features = exp(shannon)
+  )
+}
+
+per_sample <- bind_rows(
+  sample_stats(species, "species"),
+  sample_stats(genes,  "genes")
+)
+per_sample
+```
+
+The columns, in plain words:
+
+- **library_size** — total reads in the sample, the column sum.
+- **features_detected** — features with at least one read.
+- **fraction_zeros** — share of the table's rows that are zero in this sample.
+- **largest_feature** — the biggest single feature's share of the sample.
+- **shannon** — Shannon diversity, which rewards both richness (more features)
+  and evenness (shares more equal).
+- **effective_features** — `exp(shannon)`: how many equally common features
+  would give the same diversity. This answers Part 1 question 5 directly.
 
 ### Step 2: a short report
 
@@ -78,9 +119,37 @@ smallest and largest value of every column, separately for each table. Then
 write three sentences about anything unusual.*
 
 - Which medians were furthest from your Part 1 answers?
-  - *Your answer:*
+  - *Your answer: Features detected. I guessed ~50 species per sample but the median is 24; I guessed 1,000–2,000 genes but the median is about 14,100. The interesting one is the effective number, though: only ~3 species and ~1,047 genes act as if they were equally common, so my gene guess was right for the wrong reason — the genes are present, they are just extremely uneven.*
 - Did Pi mention the 438-read sample? Did it claim anything you cannot find in the table?
-  - *Your answer:*
+  - *Your answer:yes, it mentioned the 438-read sample and claimed it was an outlier*
+
+```{r}
+# Long-format summary: one row per table per column, with median / min / max.
+
+summary_table <- per_sample |>
+  pivot_longer(cols = where(is.numeric), names_to = "statistic", values_to = "value") |>
+  group_by(table, statistic) |>
+  summarise(
+    median = median(value),
+    min    = min(value),
+    max    = max(value),
+    .groups = "drop"
+  )
+summary_table
+```
+
+Three things the summary says that the raw table does not make obvious:
+
+1. **The two tables have opposite zero problems.** The species table is about
+   89% zeros, yet its largest feature still holds a median 60% of each sample —
+   a few Lactobacilli dominate everything. The gene table is only 1% zeros and
+   its largest gene holds just 8%: genes are many and evenly spread.
+2. **A sample behaves like about 3 equally common species but about 1,000
+   equally expressed genes** (median effective features). Same sequencing
+   technology, wildly different evenness.
+3. **Depth varies far more for microbes than for genes.** Species library sizes
+   span 438 to 156,000 reads — a 355-fold range, with the small ones a real
+   worry — while gene library sizes span only about fivefold (6 to 29 million).
 
 ### Step 3: one number, four plots
 
@@ -89,7 +158,48 @@ histogram, the same histogram on a log scale, the samples ranked from smallest
 to largest, and library size by visit. Use both tables.*
 
 - Which view makes the 438-read sample obvious, and which hides it? Which would you put in a paper?
-  - *Your answer:*
+  - *Your answer: The ranked dot plot makes the 438-read sample (P028_week_18) most obvious — it sits far below the next smallest sample with a visible gap. The log histogram shows it too, as an isolated bar at the far left. The plain linear histogram hides it completely: species depths of 438 to 156,000 all collapse into one wide bar. For a paper I would use the ranked plot on a log axis — it shows every sample and makes a bad one impossible to miss.*
+
+```{r step-3-four-plots}
+# Four views of the same number: library size for every sample, both tables.
+
+# 1. Histogram on the linear scale (the one that hides the problem)
+ggplot(per_sample, aes(x = library_size)) +
+  geom_histogram(bins = 30, fill = "grey30") +
+  facet_wrap(~ table, scales = "free") +
+  labs(x = "Library size (reads)", y = "Number of samples") +
+  theme_bw(base_size = 14)
+
+# 2. Same histogram on a log scale
+ggplot(per_sample, aes(x = library_size)) +
+  geom_histogram(bins = 30, fill = "grey30") +
+  scale_x_log10(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+  facet_wrap(~ table, scales = "free_x") +
+  labs(x = "Library size (reads, log scale)", y = "Number of samples") +
+  theme_bw(base_size = 14)
+
+# 3. Samples ranked from smallest to largest (rank computed within each table)
+ranked <- per_sample |>
+  group_by(table) |>
+  mutate(rank = rank(library_size)) |>
+  ungroup()
+ggplot(ranked, aes(x = rank, y = library_size)) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  scale_y_log10(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+  facet_wrap(~ table, scales = "free_y") +
+  labs(x = "Sample rank (smallest to largest)", y = "Library size (reads, log scale)") +
+  theme_bw(base_size = 14)
+
+# 4. Library size by visit, species table only
+per_sample |>
+  filter(table == "species") |>
+  left_join(select(metadata, sample_id, time_point), by = "sample_id") |>
+  ggplot(aes(x = time_point, y = library_size)) +
+  geom_boxplot(fill = "grey85") +
+  scale_y_log10(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+  labs(x = "Visit", y = "Library size (reads, log scale)") +
+  theme_bw(base_size = 14)
+```
 
 ### Step 4: features detected against library size
 
@@ -98,7 +208,27 @@ correlation for each table, then ask how many extra genes the correlation
 amounts to between the shallowest and the deepest samples.
 
 - How many extra genes, out of 14,226? Does the plot agree with Pi?
-  - *Your answer:*
+  - *Your answer: Spearman is 0.50 for the genes table (and only 0.06 for species). From the shallowest to the deepest sample the count rises from 13,830 to 14,142 — about 300 extra genes, barely 2% of the 14,226 (my earlier 252 was the slope-based estimate; the direct difference is 312). So yes, the plot agrees: deeper sequencing buys almost no new genes here.*
+
+```{r step-4-correlation}
+# Scatter of features detected against library size, one panel per table.
+ggplot(per_sample, aes(x = library_size, y = features_detected)) +
+  geom_point(size = 1.5, alpha = 0.6) +
+  scale_x_log10(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+  facet_wrap(~ table, scales = "free") +
+  labs(x = "Library size (reads, log scale)", y = "Features detected") +
+  theme_bw(base_size = 14)
+
+# Spearman correlation for each table
+per_sample |>
+  group_by(table) |>
+  summarise(spearman = cor(library_size, features_detected, method = "spearman"))
+
+# Extra genes between the shallowest and deepest sample
+genes_only <- filter(per_sample, table == "genes")
+genes_only$features_detected[which.max(genes_only$library_size)] -
+  genes_only$features_detected[which.min(genes_only$library_size)]
+```
 
 ### Step 5: which samples to drop
 
@@ -108,8 +238,26 @@ which visits and outcomes.
 
 *The cutoff I chose, and why:*
 
+- *I chose 5,000 reads. The median sample has about 28,700 reads, and anything near 5,000 or below profiles too few species reliably (the worst sample, at 438 reads, detected only 20 of the 24 species a typical sample has). A 5,000 cutoff drops just 3 samples — all from week_18, two term and one preterm — while 10,000 drops 9 and 20,000 drops 96, most of them healthy week_18 samples that are simply at the shallow end of a normal range.*
+
+```{r step-5-cutoffs}
+# How many species-table samples each cutoff would drop.
+species_meta <- per_sample |>
+  filter(table == "species") |>
+  left_join(select(metadata, sample_id, time_point, outcome), by = "sample_id")
+
+tibble(cutoff = c(1000, 5000, 10000, 20000)) |>
+  mutate(samples_dropped = map_int(cutoff, ~ sum(species_meta$library_size < .x)))
+
+# Who is dropped at the chosen cutoff of 5,000, by visit and outcome?
+species_meta |>
+  filter(library_size < 5000) |>
+  select(sample_id, time_point, outcome, library_size) |>
+  arrange(library_size)
+```
+
 - When you asked what happens if you keep the dropped samples, did Pi's answer agree with its first reason?
-  - *Your answer:*
+  - *Your answer: Yes — keeping them does not change any conclusion, but the three shallow samples have unstable diversity estimates, so dropping them is still the safer choice.*
 
 ### Step 6: polish one figure
 
@@ -119,15 +267,67 @@ saved as a 6 by 4 inch PNG. Then ask for one thing you would not know how to
 code yourself.
 
 - Which request got you furthest? How did "make it look nicer" compare with a specific request?
-  - *Your answer:*
+  - *Your answer: The specific requests got me furthest — "put 1k/10k/1M labels on the x axis" and "make the base font 16" each changed exactly what they named. "Make it look nicer" changed one arbitrary thing and I had to ask again anyway.*
+
+```{r}
+# The Step 4 scatter, polished one request at a time. This version keeps only
+# the genes panel: it is the panel with a story worth reading from the back.
+
+# bring the outcome onto each sample so we can colour by it
+genes_outcome <- per_sample |>
+  filter(table == "genes") |>
+  left_join(select(metadata, sample_id, outcome), by = "sample_id")
+
+p_polished <- ggplot(
+  genes_outcome,
+  aes(x = library_size, y = features_detected, colour = outcome)
+) +
+  # polish 1: axis titles in words, not jargon
+  labs(
+    title = "Deeper sequencing, barely more genes",
+    x     = "Sequencing depth (reads, log scale)",
+    y     = "Genes detected",
+    colour = "Birth outcome"
+  ) +
+  # polish 2: log-axis labels a human can read — 6M, not 6e+07
+  scale_x_log10(
+    labels = scales::label_number(scale_cut = scales::cut_short_scale())
+  ) +
+  # polish 3: our two colours (colour-blind safe: orange vs blue)
+  scale_colour_manual(values = c(preterm = "#D55E00", term = "#0072B2")) +
+  geom_point(size = 2, alpha = 0.7) +
+  # polish 4: text readable from the back of the room (base_size 16)
+  theme_bw(base_size = 16) +
+  theme(plot.title = element_text(face = "bold"))
+
+p_polished
+
+# polish 5: saved as a 6 by 4 inch PNG in a new figures/ folder
+dir.create(here::here("figures"), showWarnings = FALSE)
+ggsave(
+  here::here("figures", "genes_vs_sequencing_depth.png"),
+  p_polished, width = 6, height = 4
+)
+```
 
 ### Step 7: argue with it
 
 Ask which logarithm `log()` is in R, then what the effective number would be if
 the Shannon formula used `log2()`.
 
+```{r step-7-log2}
+# log() in R is the natural logarithm, base e. Recompute the effective number
+# as if Shannon had used log2: that is 2^shannon, not exp(shannon).
+per_sample |>
+  group_by(table) |>
+  summarise(
+    effective_natural = median(exp(shannon)),
+    effective_log2    = median(2^shannon)
+  )
+```
+
 - Did the effective number change? Did Pi say it would?
-  - *Your answer:*
+  - *Your answer: Yes, it changed a lot: the median effective number falls from 3.2 to 2.3 species and from about 1,047 to 124 genes. `log()` in R is the natural log, and the effective number is not base-independent — changing the base rescales it (2^H = exp(H)^0.693), so different bases give different numbers. The ranking of samples stays the same, but you must say which base you used when quoting a diversity value.*
 
 # Exercise 2: Filters are choices
 
@@ -138,19 +338,19 @@ notebook reads. If you are short on time, do step 5 first.
 
 **1. Keeping only species present in at least 10% of samples: how many of the 220 survive, and what share of reads is lost?**
 
-- *Your answer:*
+- *Your answer:I predict approximately 30–50 species will survive the filtering. Although many species will be removed because they are rarely detected, I expect the proportion of reads lost to be relatively small because rare species generally contribute fewer reads*
 
 **2. The same 10% rule applied to 14,226 genes: how many survive?**
 
-- *Your answer:*
+- *Your answer: I predict approximately 1,000–3,000 genes will survive. I expect a large proportion of genes to be removed because gene-level data are likely to be more sparse, with many genes detected in only a small number of samples.*
 
 **3. To compare one species between two samples, what must you do to the counts first?**
 
-- *Your answer:*
+- *Your answer: Normalise the counts to account for differences in sequencing depth (library size) between samples. This allows comparison of relative abundances rather than raw read counts.*
 
 **4. If you drop the rare species, does the effective number of species in a sample go up, go down, or stay about the same?**
 
-- *Your answer:*
+- *Your answer: I predict the effective number of species will go down, as removing rare species reduces the overall diversity within each sample.*
 
 ## Part 2 — Ask, look, decide
 

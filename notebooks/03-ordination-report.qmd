@@ -1,0 +1,128 @@
+---
+title: "Two tables, one cohort: comparing the species and gene ordinations"
+subtitle: "Short report for Module 3, Exercise 2 (Reach)"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+## Question
+
+The pregnancy cohort has two count tables for the same 471 samples: which
+bacteria are there (species), and which human genes the tissue is expressing.
+Exercise 2 of notebook 03 ran the same ordination-plus-PERMANOVA pipeline on
+both. This report summarises what came out and what I chose along the way.
+
+```{r setup}
+library(tidyverse)
+library(here)
+library(microViz)
+library(phyloseq)
+library(vegan)
+library(patchwork)
+
+source(here("R/count_tables.R"))
+
+sample_groups <- read_csv(here("data/my_sample_groups.csv"))
+
+add_groups <- function(ps) {
+  sd <- as(sample_data(ps), "data.frame") |>
+    rownames_to_column("sid") |>
+    left_join(sample_groups |> select(sample_id, community, lacto_fraction),
+              by = c("sid" = "sample_id")) |>
+    column_to_rownames("sid")
+  sample_data(ps) <- sample_data(sd)
+  ps
+}
+
+ps_species <- add_groups(as_counts(table = "microbiome"))
+ps_genes   <- add_groups(as_counts(table = "rnaseq", min_count = 10,
+                                   min_samples = 100))
+dat_g <- as(sample_data(ps_genes), "data.frame")
+```
+
+## What the two tables say
+
+```{r}
+#| label: ordinations
+# Species: Bray-Curtis on raw counts (the table is 89% zeros).
+sp_ord <- ps_species |>
+  tax_transform("identity") |> dist_calc("bray") |> ord_calc("PCoA")
+
+# Genes: CLR + Euclidean on gene symbols (the table is 0.7% zeros but
+# compositional, with a few hugely expressed genes).
+# tax_agg(rank = "symbol") is memory-hungry on this wide table, so aggregate
+# with rowsum() instead and hand microViz the symbol-level table.
+agg_to_symbol <- function(ps) {
+  counts <- as(otu_table(ps), "matrix")
+  sym <- as.character(tax_table(ps)[, "symbol"])
+  agg <- rowsum(counts, group = sym, reorder = FALSE)
+  tt <- data.frame(symbol = unique(sym)); rownames(tt) <- tt$symbol
+  phyloseq(otu_table(agg, taxa_are_rows = TRUE),
+           tax_table(as.matrix(tt)), sample_data(ps))
+}
+gene_ord <- agg_to_symbol(ps_genes) |>
+  tax_transform("clr") |>
+  dist_calc("euclidean") |> ord_calc("PCoA")
+
+pal <- c(anaerobe = "#F8766D", lactobacillus = "#00BFC4")
+p1 <- ord_plot(sp_ord, color = "community") +
+  labs(title = "Species: who is there", colour = "community") +
+  scale_colour_manual(values = pal) + theme_bw()
+p2 <- ord_plot(gene_ord, color = "community") +
+  labs(title = "Genes: what the host is doing", colour = "community") +
+  scale_colour_manual(values = pal) + theme_bw()
+p1 | p2
+```
+
+```{r}
+#| label: permanova
+D_s <- as.dist(attr(sp_ord, "dist"))
+D_g <- as.dist(attr(gene_ord, "dist"))
+set.seed(21)
+perm_s <- adonis2(D_s ~ community + outcome + time_point + rnaseq_batch,
+                  data = as(sample_data(ps_species), "data.frame"),
+                  permutations = 999, by = "margin")
+set.seed(21)
+perm_g <- adonis2(D_g ~ community + outcome + time_point + rnaseq_batch,
+                  data = dat_g, permutations = 999, by = "margin")
+vars <- c("community", "outcome", "time_point", "rnaseq_batch")
+knitr::kable(round(data.frame(
+  species_R2 = perm_s$R2[1:4], species_p = perm_s$`Pr(>F)`[1:4],
+  genes_R2   = perm_g$R2[1:4], genes_p   = perm_g$`Pr(>F)`[1:4],
+  row.names = vars), 4),
+  caption = "PERMANOVA (by = margin, 999 permutations)")
+```
+
+Three findings carry the report:
+
+1. **`community` is a species-table phenomenon** (R² 17.5% vs 1.9% on genes).
+   Which bacteria dominate says little about the host transcriptome as a whole.
+2. **`outcome` is a gene-table phenomenon** (R² 2.0% vs 0.5% on species,
+   p = 0.001 on both). Preterm birth leaves a much clearer footprint in host
+   gene expression than in bacterial composition — encouraging for the
+   gene-by-gene tests in module 04.
+3. **`rnaseq_batch` only matters on the gene table** (2.0% vs 0.15%), and it
+   must be modelled there: it is the same size as the outcome signal. Batch is
+   a participant-level label (all three visits of every participant share a
+   batch), so it cannot contaminate within-participant comparisons, but any
+   between-participant test needs the batch term. Per-gene, per-batch
+   mean-centring removed batch (R² 2.03% → 0.01%) without touching community
+   (1.82% → 1.86%) or outcome (2.02% → 2.06%).
+
+The two ordinations put the same samples in only weakly related places
+(Spearman rho −0.06 on axis 1, 0.18 on axis 2), so the gene table is not a
+blurrier copy of the species table: the two largely measure different biology.
+
+## Choices made
+
+- **Distance for species:** Bray-Curtis on raw counts; alternative not chosen: Jaccard (presence/absence threw away the abundance differences that define the community types) and CLR-Euclidean (same separation but weaker).
+- **Distance for genes:** CLR transformation then Euclidean; alternative not chosen: Bray-Curtis on raw counts (doubles the apparent `outcome` R² to 4.0% — reported as a sensitivity check, not as the headline, to stay consistent with the species analysis).
+- **Gene filter:** keep genes with ≥10 reads in ≥100 samples (13,883 of 14,226 locus groups); alternatives not chosen: no filter (14,226 genes) and a strict filter (100 reads / 200 samples, 8,670 genes) — both gave the same conclusions, so the default was kept.
+- **PERMANOVA setting:** `by = "margin"` so each variable's R² is adjusted for all others and does not depend on formula order; alternative not chosen: `by = "terms"` (sequential, order-dependent — kept only in notebook 03 Exercise 1 to demonstrate the difference).
+- **Permutations:** 999 (p-values to three decimals); alternative not chosen: 9,999 for stabler small p-values (too slow for the many reruns this module needed).
+- **Batch correction:** per-gene, per-batch mean-centring of CLR values (no extra packages needed); alternative not chosen: a model-based method such as limma's `removeBatchEffect` with outcome in the design (limma not installed), which would protect outcome signal better but was unavailable.
+- **Samples dropped:** none. The three shallow samples (<5,000 reads, dropped from the diversity analyses in notebook 02) were kept here because Exercise 1, Step 7 showed removing them moves neither the ordination nor the R² values.
+- **Samples per participant:** all three visits analysed as 471 samples despite PERMANOVA treating them as independent (pseudo-replication); alternative not chosen: one visit per participant or permutations restricted within participant — less standard for a first pass and not needed for the qualitative conclusions.

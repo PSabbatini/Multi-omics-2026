@@ -1,0 +1,668 @@
+---
+title: "Why we did it this way — the reasoning behind every method, step and decision"
+subtitle: "Group B (contraception study): the QC report and the three analysis questions"
+format: html
+execute:
+  warning: false
+  message: false
+---
+
+> This document answers one question about our Group B project: **not "what
+> did we do?", but "why did we do it that way?"** For every check in the QC
+> report (`01-qc.html`) and every step in the three analyses
+> (`dataset-overview.html`), it explains why we chose that method, why we
+> drew the figure that way, why we picked that filter or threshold — and, in
+> every case, an alternative we did *not* choose.
+>
+> It is a companion page, not a new analysis: no new numbers are computed
+> here. Every number quoted already appears in the QC report or the main
+> overview, and you can verify each one with the check-yourself commands
+> those pages give.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+# How to read this page
+
+Each entry has the same shape:
+
+- **What we did** — one line, in plain words.
+- **Why this method** — the reasoning, including why the problem made this
+  the natural tool.
+- **Why we represented it that way** — why the figure/table looks how it
+  looks (log scale, colour choice, bar chart vs scatter, and so on).
+- **Not chosen** — a real alternative we passed on, and why.
+
+A few terms that come up repeatedly, defined once here:
+
+- **Compositional data**: sequencing gives each sample a fixed number of
+  reads, so everything is a *share* of the total. If one species goes up,
+  others must look like they went down. Absolute amount and relative share
+  are different claims.
+- **Normalisation**: putting samples with different sequencing depths on the
+  same footing before testing.
+- **Adjusted p-value**: a p-value corrected for the fact that we ran
+  thousands of tests at once; without the correction, 5% of them would pass
+  by luck.
+
+---
+
+# Part 1 — the QC report (`01-qc.html`)
+
+The QC report exists because a mistake at the top of a pipeline contaminates
+everything below it. We checked the boring-but-fatal things *first*: sample
+alignment, missing values, sequencing depth, sparsity, batch effects. Each
+section explains what could go wrong if we skipped it.
+
+## 1.1 Checking the sample sheet first
+
+**What we did.** Looked at the metadata: 93 unique sample IDs, no missing
+cells, and the shape of the three arms (28 pill / 39 injectable / 26 ring).
+
+**Why this method.** The sample sheet is the *row of truth* — every other
+table gets matched to it. If it has duplicate IDs or gaps, every later join
+silently mismatches samples. We also counted the arms because unequal group
+sizes matter for statistical power later: with 26 ring users against 39
+injectable, comparisons involving the ring arm are the noisiest, and no test
+can fix that. Either way, we needed to know the shape before choosing tests.
+
+**Why we represented it that way.** The BV-by-arm chart uses
+`position = "fill"` (stacked proportions, not counts) because the arms are
+unequal — with raw counts, a bigger arm automatically looks like it has more
+BV, which would be meaningless. Proportions make the arms directly
+comparable.
+
+**Not chosen.** Reading the CSV by eye in a spreadsheet — it cannot detect
+duplicate IDs or tell you which tables share the same sample order.
+
+## 1.2 Checking that all tables describe the same 93 samples
+
+**What we did.** Compared the column order of both count tables (and the
+cytokine table) against the metadata row order, with `identical()`.
+
+**Why this method.** DESeq2 matches count-matrix columns to the design table
+by **position, not by name** — it will not warn if they disagree, it will
+just produce wrong results. Our `read_counts()` helper already reorders the
+columns to match the metadata, but we check anyway: the check costs one line
+and the failure mode is silent. The workshop rule "check the order" exists
+for exactly this reason.
+
+**Why we represented it that way.** There is deliberately no figure — this
+is a yes/no check. A single `FALSE` should stop everything until fixed, so
+a number that is easy to spot (a bare `TRUE` line) is the right presentation.
+
+**Not chosen.** Trusting the loader without verifying, or eyeballing a few
+sample IDs. Silent misalignment is the single most dangerous failure in this
+kind of analysis, and neither alternative would reliably catch it.
+
+## 1.3 Sequencing depth (library size)
+
+**What we did.** Computed total reads per sample for both tables, drew three
+views — a histogram, a sorted bar chart with an alarm line at 10% of the
+median, and a scatter of species-depth against gene-depth — and named the
+five shallowest samples.
+
+**Why this method.** A sample sequenced far less than the others detects
+fewer things *because it was sequenced less*, not because its biology
+differs. Before any test we need to know whether any sample sits far below
+the rest. We found one: **B006** (5,247 species reads vs a median near
+29,000 — roughly a sixth of the median).
+
+**Why we represented it that way.** Each of the three views answers a
+different question, and one figure could not answer all three:
+
+- the **histogram** shows the shape of the whole distribution (one broad lump
+  = healthy);
+- the **sorted bar chart** makes the one outlier easy to *name* — a histogram
+  can show a lump displaced to the left but cannot tell you which sample;
+- the **scatter** (species depth vs gene depth) distinguishes two very
+  different problems: if B006 were shallow in *both* tables, the library
+  itself failed; since B006 is fine for genes, the problem is a low-yield
+  bacterial extraction, not a broken sample.
+
+The red line sits at **10% of the median** because we wanted a simple,
+defensible alarm bell. Log scale on the histogram because library sizes span
+an order of magnitude — on a linear scale the outlier would squash every
+other bar into invisibility.
+
+**Not chosen.** A fixed 1,000-read floor (arbitrary — why 1,000?) or
+interquartile-range outlier rules (more formal, but easier to defend to a
+biologist as "a sixth of a typical sample"). We also did **not drop B006
+here**: dropping is a per-analysis decision that belongs in each analysis
+report, where its effect on the results can be seen.
+
+## 1.4 Sparsity and dominance
+
+**What we did.** Measured the fraction of zeros in each table, the largest
+share any single feature holds in a sample, species prevalence (in how many
+samples is each species seen?), and a rank-abundance curve for one
+median-depth sample.
+
+**Why this method.** Both tables are compositional, and composition dictates
+which methods are legal later. The species table is ~88% zeros and one
+*Lactobacillus* often exceeds half the reads — that sparsity is exactly why
+we chose composition-aware methods (DESeq2's negative-binomial model, CLR
+thinking) for the species table. The gene table is dense (~3% zeros), so it
+can take the standard RNA-seq pipeline unchanged. Deciding this *before*
+analysis avoids retrofitting methods.
+
+**Why we represented it that way.** The **prevalence histogram** shows the
+classic microbiome shape — most species detected in only a handful of
+samples, a few in nearly all — which is what motivates the prevalence filter
+used later. The **rank-abundance curve** shows dominance in one picture: a
+steep fall = one species dominates. We drew it for the *median-depth* sample
+rather than the average or the best sample, because a median sample is the
+most typical, and a single representative curve is easier to read than a
+colour-by-arm grid of 93 curves.
+
+**Not chosen.** Shannon diversity as the sparsity summary — it is a
+different question (diversity within samples, which the main analysis tests
+properly in its step 1). We also deferred the prevalence *filter* decision to
+the analysis reports, where its effect on results is visible.
+
+## 1.5 Are these really counts?
+
+**What we did.** `stopifnot()` checks that both count tables are whole,
+non-negative, and contain no missing values; then looked at where the
+cytokines *do* have gaps.
+
+**Why this method.** DESeq2 refuses (or misbehaves on) fractional or
+negative values. This is a pass/fail gate, and the honest response to a
+failure is to go back to the exporter — never to patch numbers by hand. It
+is free insurance at this stage. The cytokines found two participants,
+**B018 and B029**, missing *every* cytokine value — a whole-assay failure,
+not scattered gaps.
+
+**Why we represented it that way.** Again, no figure: a gate check should be
+a statement, not a picture. The consequence, though, *is* worth stating in
+every later report: cytokine analyses run on 91 samples, count-table
+analyses on all 93, so results from the two arms of the project rest on
+slightly different sample sets.
+
+**Not chosen.** Silent assumptions ("the data came from a pipeline, it must
+be fine") — the workshop rule is that DESeq2 will not warn you.
+
+## 1.6 Feature annotations
+
+**What we did.** Checked every counted taxon and gene has exactly one
+annotation row, and looked at what kinds of genes are in the annotation.
+
+**Why this method.** A feature we can count but not name is one we cannot
+interpret or report. Full coverage in both tables passed. One real catch:
+**two different Ensembl genes share a symbol**, so any analysis that
+aggregates per symbol (including microViz's `tax_transform(rank = "symbol")`)
+would silently merge two distinct genes' counts.
+
+**Why we represented it that way.** The annotation-category bar chart uses a
+**log-scaled y-axis** because a few categories have thousands of genes and
+most have dozens — a linear axis would render the small bars unreadable.
+
+**Not chosen.** Aggregating by gene symbol anyway — rejected because of the
+duplicate-symbol catch; we aggregate per Ensembl gene ID instead.
+
+## 1.7 Cytokines
+
+**What we did.** Looked at the range of each cytokine, plotted all 15 on one
+log-scale boxplot, and tabulated each cytokine's minimum value.
+
+**Why this method.** Cytokines are concentrations (pg/mL), not counts, and
+they are measured with a **lower limit of detection (LLOD)** — the smallest
+amount the assay can reliably distinguish from zero. Several cytokines have
+minimum values that repeat *suspiciously exactly* (e.g. 0.005 pg/mL): those
+are the LLOD floor, not true measurements. Knowing this before modelling
+prevents treating 0.005 as a real number.
+
+**Why we represented it that way.** The boxplot is on a **log scale and
+flipped horizontal** — cytokines vary over orders of magnitude, so only log
+scale is honest, and 15 labelled cytokines read far better as horizontal
+boxes. The flat line of crammed points at the bottom of each box *is* the
+LLOD story, visible at a glance. The minimum-value chart makes the repeated
+floor values directly comparable across cytokines.
+
+**Not chosen.** Correcting sub-LLOD values here (e.g. imputation or
+substitution) — that decision belongs to whichever report actually models
+cytokines, because the right handling depends on the model.
+
+## 1.8 Batch effects
+
+**What we did.** Cross-tabulated the two RNA-seq batches (B1, B2) against
+the three arms, and compared gene library sizes between batches (boxplot and
+overlaid density curves).
+
+**Why this method.** Batch effects are systematic differences between
+processing runs that can masquerade as biology. They are only *dangerous*,
+though, when tangled with the grouping variable — if every pill sample were
+in batch B1 and every ring sample in B2, "arm" and "batch" would be
+indistinguishable. The cross-tabulation tests exactly that: both batches
+contain all three arms in similar numbers (pill 14/14, injectable 20/19,
+ring 13/13), so batch and arm are **not confounded**.
+
+**Why we represented it that way.** The boxplot is a crude check for a level
+shift between batches; the **overlaid density curves** are the stricter
+check — if the two curves sit on top of each other (they nearly do), the
+batches are interchangeable. Both are shown because a boxplot hides shape
+differences that densities reveal.
+
+**Not chosen.** An ordination coloured by batch at QC stage — deferred to
+the analyses, which keep `rnaseq_batch` as a covariate in every DE model
+anyway (standard practice even when the QC looks clean).
+
+## 1.9 The verdict table
+
+**What we did.** Summarised every check as pass / issue / action, with the
+one real decision highlighted (what to do with B006 in species work).
+
+**Why this method.** A QC report that does not end in a list of decisions is
+just a notebook. The table format forces each check to have a stated
+consequence, and highlights that nothing blocks the analysis.
+
+**Why we represented it that way.** The report also ends with
+**check-yourself commands** (e.g. `colSums(spec)[order(colSums(spec))[1:5]]`
+should print B006 at 5,247) — because every claim in QC should be
+independently verifiable with one line of code, in case we made an error
+writing the report itself.
+
+---
+
+# Part 2 — Question 1: does the microbiome differ by contraceptive arm?
+
+*(Numbers and figures from `analysis-microbiome-arm.R`, reported in
+`dataset-overview.html`.)*
+
+## Step 0 — Are the arms comparable to begin with?
+
+**What we did.** Compared library sizes across arms before any test.
+
+**Why this method.** If one arm had been sequenced much more deeply, any
+later difference could be a depth difference. This is the same check as in
+the QC report, now *stratified by arm* — QC looked at samples one at a
+time; here we look at groups.
+
+**Why we represented it that way.** A single faceted bar chart (fig1) with
+all three arms side by side — the question is comparative, so the picture
+should be too.
+
+## Step 1 — Alpha diversity (diversity *within* a sample)
+
+**What we did.** Computed Shannon diversity per sample, compared arms with a
+Kruskal–Wallis test plus pairwise Wilcoxon tests, and drew boxplots (fig2).
+
+**Why Shannon.** Shannon captures *both* how many species are present
+(richness) and how evenly their reads are spread (evenness). The main
+alternative, observed species count, sees only richness and would miss a
+sample shifting from Lactobacillus-dominance towards an even mix.
+
+**Why Kruskal–Wallis rather than ANOVA.** Shannon values here are not
+normally distributed and the groups are modest in size; a rank-based test
+makes no distributional assumption. Pairwise Wilcoxon tests follow it up
+because the overall test only says "somewhere differs", not which pair.
+
+**Why we represented it that way.** Boxplots (not bar charts of means)
+because they show the full spread — and the *overlapping* boxes are the
+honest picture: pill's median (0.90) sits below injectable's (1.74), but the
+overlap is heavy, which is exactly what the non-significant p = 0.47 says. A
+bar chart of means would have hidden that nuance.
+
+**Not chosen.** ANOVA on log-transformed values — works, but assumes
+normality of the transformed values and buys nothing here.
+
+## Step 2 — What the communities are made of
+
+**What we did.** Stacked-bar composition plots (fig3) coloured by phylum.
+
+**Why this method.** Before testing *whether* communities differ, look at
+*what* they are made of — it grounds every later result in biology (here:
+Lactobacillus-dominated vs anaerobe-rich samples).
+
+**Why we represented it that way.** Stacked bars are the standard grammar
+for compositional data, but they must be read as *shares*, not amounts —
+the compositional caveat. Colouring by phylum (not species) keeps the
+picture legible at 93 samples.
+
+## Step 3 — Beta diversity: does the *whole community* differ?
+
+**What we did.** Computed Bray–Curtis distances between all pairs of
+samples, ordinated them with PCoA (fig4), and tested group separation with
+PERMANOVA (`adonis2`) at 999 permutations — a full model
+(`arm + bv + any_sti + batch`) and arm alone.
+
+**Why Bray–Curtis.** It is the standard ecological distance for
+community-composition data and is interpretable ("these two samples share
+about x% of their community"). We discussed the Aitchison distance on
+CLR-transformed counts — arguably more correct for compositional data — but
+chose Bray–Curtis for interpretability, and because the sparsity is
+moderate.
+
+**Why PCoA.** It gives exact axis-variance percentages (fig4's axis labels),
+which is what lets us say the three arms intermingle. NMDS would order
+samples but not give those percentages.
+
+**Why PERMANOVA at 999 permutations.** Distances between samples are not
+independent (every sample appears in many pairs), so ordinary ANOVA on
+coordinates would be invalid. PERMANOVA is the standard fix, and 999
+permutations gives p-values stable enough to report. The **full model**
+adjusts for BV, STI and batch, because the QC showed BV dominates this
+dataset — testing arm *without* it would mostly re-discover BV. The
+**arm-alone** model is reported alongside so the reader can see how weak the
+raw association is (R² ≈ 0.03, p ≈ 0.1).
+
+**Why we represented it that way.** The PCoA is coloured by arm so that the
+permutation result can be checked visually: three intermingling colours
+*should* accompany a small R². If the test said "significant" while the
+plot showed clean separation by accident of colouring, one of them would be
+wrong.
+
+**Not chosen.** PERMANOVA adjusted only for batch — it answers a different
+question and would give BV credit for arm differences.
+
+## Step 4 — Which species differ? (DESeq2)
+
+**What we did.** DESeq2 on raw species counts, design
+`~ rnaseq_batch + bv + arm`, minimal filter, Benjamini–Hochberg adjusted
+p < 0.05, results as a top-hits bar chart (fig5) and tables.
+
+**Why raw counts.** The workshop's central rule: DESeq2 does its own
+normalisation internally (size factors) and expects the unnormalised,
+unlogged counts it was designed for. CPM or logged values would invalidate
+its dispersion model. We report this here because it is the single easiest
+rule to break.
+
+**Why this design.** Three covariates, each with a reason:
+
+- `rnaseq_batch` — QC showed two batches; even unconfounded, adjusting
+  removes residual noise.
+- `bv` — BV *is* the species table in summary form; leaving it out would
+  attribute BV-driven differences to the arm.
+- No `any_sti` — a defensible choice at the time; the methods review
+  (`02-methods-review.html`) later recommended adding it for consistency
+  with the PERMANOVA model. We note the inconsistency rather than pretend
+  it does not exist.
+
+**Why that filter.** Total reads ≥ 10 per species, keeping 110 of 220
+species. The purpose is to reduce noise and the multiple-testing burden.
+It is deliberately *minimal* — a stricter filter changes results, and we
+wanted the most standard, most reproducible choice. (The review also notes
+a prevalence-based filter, presence in ≥ 5 samples, would keep 72 species
+and shrink the testing burden further — worth considering next time.)
+
+**Why adjusted p < 0.05 (Benjamini–Hochberg).** With 220 species tested at
+once, unadjusted p-values would guarantee false positives (5% of 220 ≈ 11
+species "significant" by luck). BH controls the false-discovery rate — the
+fraction of significant results expected to be false — which is the standard
+correction for many simultaneous tests. p < 0.1 would be more sensitive at
+the cost of more false positives; we stayed with the conventional 0.05.
+
+**Why we represented it that way.** The bar chart (fig5) shows the largest
+log2 fold changes among significant species — the size of each difference,
+signed by direction. One honest caveat, flagged in the overview and made
+concrete by the review: raw log2FCs from low-count species (e.g.
+*Atopobium minutum*, +28.3 on an average of 18 reads) are unreliable, and
+shrinking them (`lfcShrink`) reorders the chart substantially. The
+*significance* lists are unaffected.
+
+**Not chosen.** Defining groups from the counts themselves — violates the
+workshop rule (never define a group from a table and test that same table);
+groups come from the metadata (`arm`), the table is only tested.
+
+## Question 1 — why this overall shape?
+
+Four steps, in order of *coarseness*: depth → diversity → whole community →
+individual species. Each step's result conditions how to read the next:
+weak differences at step 3 mean the species list at step 4 is a short,
+consistent story (BV-associated anaerobes in ring/injectable users), not a
+genomic upheaval. Presenting them in this order makes the modest conclusion
+unavoidable rather than buried.
+
+---
+
+# Part 3 — Question 2: does the ring differ from the systemic methods in host gene expression?
+
+## The grouping decision: `route` (local vs systemic)
+
+**What we did.** Collapsed pill + injectable into one "systemic" group and
+tested ring (local) against it.
+
+**Why this method.** The ring delivers hormone *at the vagina*; pill and
+injectable deliver it through the bloodstream. If the local-vs-systemic
+route is the biologically meaningful distinction, testing it directly has
+more power than three pairwise arm contrasts — one comparison instead of
+two, on groups of 26 vs 67. The group is defined from the **metadata**
+(`arm`), never from the gene table — the workshop rule, kept precisely.
+
+**Why we represented it that way.** The route table (26 ring, 67 systemic)
+is printed in full so the collapse is visible and checkable.
+
+**Not chosen.** Testing the three arms separately and arguing from the
+pattern — less direct, and the pairing of comparisons would need its own
+multiplicity correction.
+
+## Step 0 — comparable sequencing depth
+
+Same reasoning as QC section 1.3, now per group: gene depths (5.9–24
+million reads) are comfortably even, so no sample needs excluding from the
+gene analysis.
+
+## Step 1 — the big picture: PCA (fig7)
+
+**What we did.** PCA on variance-stabilised (VST) values of the 500 most
+variable genes, coloured by route.
+
+**Why VST.** Raw RNA-seq counts have variance that grows with the mean,
+which would let a handful of highly expressed genes dominate every axis.
+VST makes variance roughly constant across the expression range — the
+standard transform for *visualising* expression data.
+
+**Why VST here but never for the test.** This is the workshop's second rule
+stated again: transforms are for pictures, DESeq2's model is for raw
+counts. Keeping the two strictly separate is what makes every downstream
+p-value defensible.
+
+**Why the top 500 most variable genes.** PCA on all 14,226 genes is
+dominated by thousands of unchanging, low-expression genes that add noise,
+not signal. Ranking by variance selects the genes that carry the structure
+the plot is meant to show. 500 rather than 2,000 because this is a
+visualisation, not a test — enough genes for a stable picture, few enough
+to stay dominated by real structure.
+
+**Why we represented it that way.** PCA (not UMAP or t-SNE) because PCA
+axes are linear and their loadings are interpretable — you can ask *which
+genes* pull a sample to the right, which is exactly how fig8's genes were
+found.
+
+## Step 2 — the formal test: DESeq2 on raw gene counts
+
+**What we did.** DESeq2 with design `~ rnaseq_batch + bv + any_sti + route`,
+raw counts, adjusted p < 0.05.
+
+**Why DESeq2 rather than limma-voom.** DESeq2 was already the workshop
+tool, is designed for raw counts exactly like ours, and its dispersion
+model suits small samples. Either method is defensible; switching tools
+mid-project would add re-learning, not accuracy.
+
+**Why these covariates.** Same logic as Question 1 plus one:
+
+- `rnaseq_batch` — QC-checked, kept as insurance.
+- `bv` — the ring arm had the most BV-like microbiome; without adjusting,
+  BV-driven host responses would be attributed to the ring.
+- `any_sti` — STI inflammation could mimic a route effect, so it is held
+  constant. Entered as 0/1 numeric (a factor is equivalent for two levels).
+
+**Why that filter.** Total reads ≥ 10 per gene — minimal, for the same
+reasons as Question 1. The review later showed this particular filter keeps
+*all* 14,226 genes (a no-op, since no gene is that rare) — we report that
+honestly rather than pretend it trimmed anything.
+
+**Why adjusted p < 0.05.** With 14,226 tests, the multiple-testing problem
+is far bigger than in Question 1; BH correction is not optional here.
+
+**Why we represented it that way.** The bar chart (fig8) is signed by
+direction (orange = higher in ring, blue = higher in systemic) so the two
+gene *programmes* — secretory/inflammatory vs squamous-epithelial — are
+visible as a pattern, not just a list. The tables rank by adjusted p-value
+rather than fold change, deliberately: p-value order is more stable than
+raw log2FC order, which is exactly the lesson from fig5.
+
+**Not chosen.** Testing on CPM or logged values — violates the raw-counts
+rule. Requiring a minimum log2FC in addition to padj < 0.05 — defensible,
+but it hides low-fold-change genes that are nonetheless very well supported;
+we preferred listing effect sizes so readers can apply their own judgement.
+
+## Step 3 — the consistency check
+
+**What we did.** Fitted a separate model with `arm` in the design and
+compared ring-vs-pill (60 significant genes) and ring-vs-injectable (87)
+contrasts: 11 genes significant in both, all pointing the same direction.
+
+**Why this method.** If "local vs systemic" is the real story, ring should
+differ from *both* systemic methods in the *same* direction. Agreement
+between two independently fitted models is evidence the signal is about the
+route, not about one particular pair. The review later suggested a cleaner
+one-number version: contrast pill directly against injectable (only 4
+significant genes) — showing the two systemic arms are nearly
+interchangeable. Both versions support the collapse; the direct contrast is
+the one to lead with next time.
+
+**Why we represented it that way.** A three-row table (60 / 87 / 11-shared,
+same direction) rather than a Venn diagram — the numbers are few, and the
+*direction* agreement is the point.
+
+## Question 2 — overall answer and why it is phrased so carefully
+
+**Why "yes, modestly but consistently".** 66 of 14,226 genes (0.5%) is
+small; the *coherence* of the two gene programmes and the agreement between
+the two contrasts is what makes the finding believable. The BPIFA1 caution —
+it is bacteria-induced, and the ring arm is the most BV-like — is stated in
+the overview because the cross-sectional design cannot separate "the ring
+affected the tissue" from "the ring shifted the microbiome, and the tissue
+responded". Adjusting for BV helps but cannot fully untangle a mediator.
+
+---
+
+# Part 4 — Question 3: community type vs method — which explains host genes better?
+
+## Step 1 — defining community types from the *microbiome*
+
+**What we did.** Bray–Curtis distances between participants' microbiomes,
+Ward's clustering, cut into k = 3 groups (chosen by best mean silhouette
+among k = 2–5), named by dominant species (crispatus-dominant /
+iners-dominant / diverse).
+
+**Why cluster at all.** Contraceptive *arm* is a label; microbiome
+*community type* is a pattern discovered in the data. Clustering asks
+whether participants fall into natural microbiome states — the classic
+community state types — without assuming the arm labels matter.
+
+**Why Bray–Curtis + Ward.** Bray–Curtis for the same reasons as Question 1's
+beta diversity (standard, interpretable). Ward's method minimises within-
+cluster variance and produces compact, evenly sized clusters, which suits
+comparison of groups later.
+
+**Why k = 3.** Chosen by **mean silhouette** — a measure of how well each
+sample sits in its cluster — across k = 2–5 (best: 0.323 at k = 3). This is
+a data-driven choice with a stated criterion, rather than an arbitrary
+pick. The planned robustness check (rerun with k = 2 and see whether
+conclusions survive) is the right follow-up, and is suggested in the
+overview's check-yourself section.
+
+**Why we named clusters by biology.** "C1–C3" forces the reader to memorise
+a code; "crispatus-dominant / iners-dominant / diverse" carries the biology
+in the name. Naming by dominant species is verifiable (fig10 shows the
+composition of each type).
+
+**Why this respects the one-table rule.** The types are defined **from the
+species table** and tested **against the gene table** — the group is never
+defined and tested on the same table. This is the workshop rule the whole
+question is built to demonstrate.
+
+## Step 2 — testing which grouping explains genes better
+
+**What we did.** Two complementary comparisons, because "explains more" can
+mean two different things:
+
+1. **Per-gene**: DESeq2 likelihood-ratio tests (LRT) with design
+   `~ rnaseq_batch + bv + any_sti + grouping`, once with `ctype_lab`, once
+   with `arm` — counting significant genes for each (93 vs 49).
+2. **Genome-wide**: PERMANOVA on VST values of the 2,000 most variable
+   genes, Euclidean distances — R² for each grouping (0.020 vs 0.032).
+
+**Why the LRT rather than pairwise Wald tests.** Community type has three
+levels; a Wald test would need all pairwise contrasts unioned, with messy
+multiplicity logic. The LRT handles a multi-level grouping in one test per
+gene: "does this grouping improve the model's fit at all?"
+
+**Why adjust for BV in both models.** The diverse type is 37/39 BV-positive
+— nearly a synonym for BV. Without the BV covariate, the comparison would
+mostly re-discover BV rather than ask the intended question. This is a
+choice we state explicitly because it *narrows* the claim: "type beyond
+what BV already explains".
+
+**Why PERMANOVA on VST top-2,000 with Euclidean distance.** For gene
+expression, the natural distance is Euclidean on a variance-stabilised
+scale — the same VST rationale as fig7, applied to more genes because this
+is a test of overall structure, not a picture. Using all genes or raw
+counts would be noisier for the same reason as before.
+
+**Why report two views rather than one.** A single "which explains more"
+number would force a false choice: counting significant genes asks about
+*individual genes*; R² asks about the *whole expression profile*. The split
+verdict (type wins on gene counts; method edges it genome-wide, though
+neither R² is clearly significant) *is* the finding — forcing one story
+would have discarded the more interesting answer.
+
+**Why the caveat that the two comparisons are not a formal test of each
+other.** Counting significant genes from separate models is a heuristic;
+the two numbers come from different tests and cannot be compared with a
+p-value as they stand. The overview says so plainly. (The review's nested
+LRTs — 162 vs 70 genes — make the comparison properly formal and reach the
+same conclusion; adopting that approach is the main recommended upgrade.)
+
+**Not chosen.** A single formal non-nested model comparison — not standard
+for DESeq2 grouping variables and harder to explain; the two-view framing
+is the simpler honest choice.
+
+---
+
+# Part 5 — cross-cutting decisions
+
+These apply everywhere, so they are collected here rather than repeated.
+
+| Decision | Why | Not chosen |
+|---|---|---|
+| Groups defined from metadata only (`arm`, `route`) | Never define a group from a count table and test that same table — circular reasoning guarantees "findings" | Defining `route` or community types from the gene table |
+| Raw counts into DESeq2; VST only for figures | DESeq2's normalisation and dispersion model assume raw counts | CPM, log2, or TPM inputs |
+| Column order checked before every test (`stopifnot`) | DESeq2 matches by position and will not warn otherwise | Trusting the loader |
+| Adjusted p < 0.05 (Benjamini–Hochberg) | Standard FDR control for thousands of simultaneous tests; stricter cutoffs hide well-supported results, looser ones inflate false positives | Unadjusted p-values; p < 0.1 |
+| Covariate adjustment (`batch`, `bv`, and `any_sti` where relevant) | QC showed batch balance and BV dominance; adjustment removes known alternative explanations | Unadjusted models as the only model (review recommends reporting both — adopted as the change to make) |
+| Minimal count filters (≥ 10 total reads) | Reduce noise with the smallest possible assumption; stricter filters change results and would need their own justification | No filter (slower, noisier); aggressive prevalence filters (worth a follow-up — see the review) |
+| No samples dropped | QC found nothing requiring exclusion; B006 matters only for the species table and was handled there | Dropping the 3 intermediate-BV samples (kept: BV is a covariate, not a grouping variable) |
+| Every number paired with a check-yourself command | A report the reader can falsify is worth more than one they must trust | Report-only pages |
+| Compositional caveats stated wherever a relative-abundance claim is made | "The share of X went down" ≠ "there was less X" — sequencing depth is fixed per sample | Ignoring compositionality |
+
+---
+
+## Choices made
+
+*(For this document itself, per the workshop convention.)*
+
+- Explained the QC report section by section and the three questions step by
+  step, mirroring the order of the original documents — alternative: a
+  single alphabetical list of decisions (harder to follow while reading the
+  original reports side by side).
+- Quoted only numbers already published in `01-qc.html` and
+  `dataset-overview.html`; no new computation — alternative: recomputing
+  everything here (duplicates the scripts and risks the two pages drifting).
+- Used tables for the cross-cutting decisions and bullet blocks for each
+  step — alternative: all prose (harder to scan) or all tables (no room for
+  the reasoning).
+- Included the methods review's corrections (shrinkage, no-op filter,
+  nested LRTs) as noted follow-ups rather than rewriting the analyses to
+  match — alternative: silently describing the *corrected* analyses, which
+  would make this page disagree with the reports it explains.
+- Plain default Quarto styling — alternative: copying the overview's custom
+  CSS (cosmetic; not worth the extra file).
+
+*To check this page against the originals:* open `01-qc.html` and
+`dataset-overview.html` beside it; every claim here has a one-line source in
+those documents, and their check-yourself commands verify the underlying
+numbers.

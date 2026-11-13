@@ -10,3 +10,12 @@
 # Rendered notebook output. Participants render locally; the template ships
 # only the .qmd sources.
 *.html
+
+# Quarto render caches (large, regenerable)
+*_cache/
+notebooks/cache/
+.Rproj.user
+
+# R scratch files
+Rplots.pdf
+ex2_step_cache.rds
